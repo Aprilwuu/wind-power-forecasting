@@ -1,7 +1,32 @@
-venv/
-*.pyc
-__pycache__/
+# macOS system
 .DS_Store
-experiments/
-data/processed/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter
 .ipynb_checkpoints/
+
+# Data (don't track data!)
+data/
+*.csv
+*.xlsx
+*.parquet
+*.pkl
+*.npz
+
+# Logs / cache / outputs
+logs/
+*.log
+*.out
+
+# Backup files
+*.bak
+*.tmp
+
+# VSCode
+.vscode/
