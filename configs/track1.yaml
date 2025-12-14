@@ -1,6 +1,6 @@
 data:
-  path: "./data/processed/gefcom_wind_all_zones_features.csv"
-  target: "TARGETVAR"
+  path: "../data/featured"
+  target: "target"
 
 train:
   model: "lightgbm"

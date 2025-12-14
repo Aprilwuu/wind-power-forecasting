@@ -1,4 +1,4 @@
-raw_data_path: "/Users/april/Library/CloudStorage/OneDrive-ThompsonRiversUniversity/Research/Probabilistic_Wind_Forecasting/data/raw/"
+combined_data_path: "../data/processed/gefcom_wind_all_zones.csv"
 
 split:
   train_cut: "2013-09-01"
@@ -8,5 +8,5 @@ features:
   lags:[1,2,3,6,12,24]
   rolling_windows:[6, 24]
 
-processed_output: "../data/processed/gefcom_wind_all_zones_features.csv"
+processed_output: "../data/featured"
 target: "target"
