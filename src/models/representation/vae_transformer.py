@@ -1,5 +1,5 @@
-from src.models.vae import SequenceVAE
-from src.models.transformer import TimeSeriesTransformer
+from src.models.representation.vae import SequenceVAE
+from src.models.deterministic.transformer import TimeSeriesTransformer
 
 import torch
 import torch.nn as nn

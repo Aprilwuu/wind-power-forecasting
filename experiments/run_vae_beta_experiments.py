@@ -1,7 +1,7 @@
-from src.models.vae import SequenceVAE
-from src.models.rnn_vae import RNNSequenceVAE
-from src.probabilistic.beta_transformer import BetaTimeSeriesTransformer
-from src.probabilistic.vae_beta_transformer import VAEBetaForecast
+from src.models.representation.vae import SequenceVAE
+from src.models.representation.rnn_vae import RNNSequenceVAE
+from src.models.probabilistic.beta.beta_transformer import BetaTimeSeriesTransformer
+from src.models.probabilistic.beta.vae_beta_transformer import VAEBetaForecast
 from src.models.losses import beta_nll_loss
 
 def train_vae_beta(model, train_loader, val_loader, device, num_epoachs=50, lr=1e-3):
@@ -37,16 +37,3 @@ def train_vae_beta(model, train_loader, val_loader, device, num_epoachs=50, lr=1
         history["val_loss"].append(np.mean(val_losses))
 
     return history
-
-
-vae = SequenceVAE(input_dim=D, hidden_dim=64, latent_dim=16)
-vae.load_state_dict(torch.load("models/vae_mlp.pt"))
-
-beta_tr = BetaTimeSeriesTransformer(input_dim=latent_dim)
-model_mlp = VAEBetaForecast(
-    vae=vae,
-    beta_transformer=beta_tr,
-    freeze_vae=True,
-    use_sample_z=False,
-).to(device)
-        

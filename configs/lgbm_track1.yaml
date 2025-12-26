@@ -1,0 +1,36 @@
+# Base config (no tuning). Kept simple for quick runs.
+
+# ----------------------------
+# Backward-compatible flat keys
+# ----------------------------
+combined_data_path: "../data/processed/gefcom_wind_all_zones.csv"
+processed_output: "data/featured"
+target: "target"
+
+# ----------------------------
+# Structured sections (used by runners)
+# ----------------------------
+data:
+  combined_data_path: "../data/processed/gefcom_wind_all_zones.csv"
+  target_col: "target"
+  zone_col: "zone_id"
+  time_col: "datetime"
+
+output:
+  pipeline_root: "data/featured"
+  experiment_name: "lgbm_base_track1"
+
+split:
+  type: "temporal"
+  train_cut: "2013-07-01"
+  val_cut: "2013-10-01"
+
+features:
+  lags: [1, 2, 3, 6, 12, 24]
+  rolling_windows: [6, 24]
+
+model:
+  base_params: {}
+  candidates:
+    - name: baseline
+      overrides: {}

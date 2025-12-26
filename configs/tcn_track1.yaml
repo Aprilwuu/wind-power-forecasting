@@ -1,0 +1,50 @@
+# Track1 temporal - SHORT (quick but meaningful)
+
+paths:
+  artifacts_dir: artifacts/models
+  reports_dir: reports/experiments
+  featured_dir: data/featured
+
+data:
+  path: data/processed/gefcom_wind_all_zones.csv
+
+split:
+  type: temporal
+  train_cut: "2013-07-01"
+  val_cut: "2013-10-01"
+
+cols:
+  target_col: target
+  zone_col: zone_id
+  time_col: datetime
+  group_col: null
+
+seq:
+  lookback: 168
+  horizon: 1
+  feature_cols: null
+  include_target_as_input: true
+  add_missing_mask: true
+
+train:
+  batch_size: 256
+  max_epochs: 20
+  patience: 5
+  lr: 0.001
+  weight_decay: 0.0
+  grad_clip: 1.0
+  device: null
+
+  # train 用 Huber，更稳；评估仍然输出 RMSE（和 LGBM 可比）
+  loss: huber
+  huber_delta: 1.0
+
+model:
+  channels: [32, 64, 64]
+  kernel_size: 3
+  dropout: 0.2
+  keep_zone: true
+  zone_emb_dim: 8
+
+candidates:
+  baseline: {}

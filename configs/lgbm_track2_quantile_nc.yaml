@@ -1,0 +1,136 @@
+# ============================================================
+# Track 2 — Quantile LightGBM (LOFO)
+# Purpose:
+#   - Probabilistic forecasting baseline for Track 2
+#   - Leave-One-Zone-Out (LOFO) outer split
+#   - Inner time-based validation for early stopping
+# ============================================================
+
+# ----------------------------
+# Experiment
+# ----------------------------
+experiment:
+  track: 2
+  name: "lgbm_track2_quantile_base"
+  tags: ["track2", "lofo", "quantile", "lgbm"]
+
+seeds: [42, 43, 44]
+
+# ----------------------------
+# Data
+# ----------------------------
+data:
+  combined_data_path: "data/processed/gefcom_wind_all_zones.csv"
+  zone_col: "zone_id"
+  time_col: "datetime"
+  target_col: "target"
+
+
+# ----------------------------
+# Feature engineering
+# ----------------------------
+features:
+  # Lags in hours
+  lags: [1, 2, 3, 6, 12, 24]
+
+  # Rolling statistics (hours)
+  rolling_windows: [6, 24]
+
+  # Track 2 default: do NOT expose zone identity
+  keep_zone: false
+
+  # Non-feature columns
+  drop_cols: ["datetime"]
+
+# ----------------------------
+# Splitting strategy
+# ----------------------------
+split:
+  # Track 2 protocol
+  type: "lofo_time_val"
+
+  # Outer split: leave one zone out
+  group_col: "zone_id"
+
+  # Inner split: last N days for early stopping
+  time_col: "datetime"
+  val_days: 30
+
+  # Safety check
+  min_train: 1000
+
+# ----------------------------
+# Model — Quantile LightGBM
+# ----------------------------
+model:
+  name: "lightgbm"
+
+  # Quantiles to train
+probabilistic:
+  quantiles: [0.1, 0.5, 0.9]
+  non_crossing:
+    method: "rearrangement"
+
+  # Base parameters (shared across quantiles)
+  base_params:
+    objective: "quantile"
+    metric: "quantile"
+
+    # Capacity / regularization (conservative for LOFO)
+    num_leaves: 64
+    min_data_in_leaf: 50
+
+    # Subsampling for robustness
+    feature_fraction: 0.8
+    bagging_fraction: 0.8
+    bagging_freq: 1
+
+    # Optimization
+    learning_rate: 0.05
+    n_estimators: 20000
+
+    # Regularization
+    lambda_l1: 0.0
+    lambda_l2: 1.0
+
+    verbosity: -1
+
+  # Single baseline candidate (no tuning for now)
+  candidates:
+    - name: "baseline"
+      overrides: {}
+
+# ----------------------------
+# Training control
+# ----------------------------
+training:
+  early_stopping_rounds: 200
+  verbose_eval: 200
+
+  # Ensure early stopping uses INNER validation only
+  eval_split: "inner_val"
+
+# ----------------------------
+# Post-processing
+# ----------------------------
+postprocess:
+  # Enforce q_low <= q_mid <= q_high
+  enforce_monotonic_quantiles: true
+
+# ----------------------------
+# Evaluation
+# ----------------------------
+metrics:
+  primary: "pinball"
+  quantiles: [0.1, 0.5, 0.9]
+
+# ----------------------------
+# Output
+# ----------------------------
+output:
+  root_dir: "data/featured"
+  experiment_name: "lgbm_track2_quantile"
+
+  save_models: true
+  save_oof_predictions: true
+  save_fold_predictions: true

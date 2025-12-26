@@ -10,8 +10,8 @@ from src.data.load import load_raw_data
 from src.data.make_dataset import make_dataset
 from src.data.split import train_valid_split
 from src.features.build_features import make_ml_features, select_ml_xy
-from src.models.lgbm import create_lgbm_model
-from src.metrics import evaluate_rmse
+from src.models.deterministic.lgbm import create_lgbm_model
+from src.metrics.deterministic import evaluate_rmse
 
 logger = logging.getLogger(__name__)
     

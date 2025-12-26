@@ -1,0 +1,80 @@
+# ============================================
+# TCN Track 2 (LOFO) - Deterministic + MC Dropout
+# ============================================
+
+paths:
+  artifacts_dir: artifacts/models
+  reports_dir: reports/experiments
+  featured_dir: data/featured
+
+data:
+  path: data/processed/gefcom_wind_all_zones.csv
+  
+# --------------------
+# Split: Track 2 LOFO
+# --------------------
+split:
+  type: "lofo_time_val"
+  group_col: "zone_id"
+  val_days: 30              # inner validation window (days)
+  min_train: 1000           # minimum rows before inner val
+  held_out_groups: [1,2,3,4,5,6,7,8,9,10]
+
+# --------------------
+# Sequence construction
+# --------------------
+seq:
+  lookback: 168              # 7 days * 24 hours
+  horizon: 1
+  feature_cols: null         # use all default numeric features
+  include_target_as_input: true
+  add_missing_mask: true
+
+# --------------------
+# Zone handling
+# --------------------
+keep_zone: false             # IMPORTANT: keep consistent with LGBM
+zone_emb_dim: null           # ignored when keep_zone=false
+
+# --------------------
+# Model: TCN
+# --------------------
+model:
+  tcn:
+    channels: [32, 64, 64]
+    kernel_size: 3
+    dropout: 0.2
+
+  seed: 42
+
+  train_loss:
+    name: "huber"            # more robust than MSE
+    huber_delta: 1.0
+
+# --------------------
+# Training
+# --------------------
+training:
+  batch_size: 256
+  max_epochs: 50
+  patience: 8                # early stopping on inner val RMSE
+  lr: 0.001
+  weight_decay: 0.0
+  grad_clip: 1.0
+  device: "mps"              # Apple Silicon (fallback handled in code)
+
+# --------------------
+# Probabilistic inference (MC Dropout)
+# --------------------
+probabilistic:
+  use_mc_dropout: true
+  mc_runs: 50
+  mc_quantiles: [0.05, 0.5, 0.95]
+
+# --------------------
+# Output
+# --------------------
+output:
+  artifact_root: "data/featured"
+  reports_root: "reports/experiments"
+  experiment_name: "tcn_track2_lofo"

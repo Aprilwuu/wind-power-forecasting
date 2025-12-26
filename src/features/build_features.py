@@ -162,22 +162,37 @@ def make_ml_features(
 
 # sequence windowing for deep models
 def _window_stack(arr: np.ndarray, L: int, H: int = 1) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Build sliding windows:
-       Inputs: past L steps
-       Targets: next H steps(default 1)
+    """Build sliding windows.
+
+    Args:
+        arr: Array of shape [T, D]. The target is assumed to be in column 0.
+        L: Lookback length (number of past steps used as input).
+        H: Forecast horizon (number of future steps to predict).
+
     Returns:
-       X:[N, L, D], y: [N, H] or [N, H, Dy]
+        X: Array of shape [N, L, D]
+        y: Array of shape [N, H]
+
+    Notes:
+        - X uses times [t-L, ..., t-1]
+        - y uses times [t, ..., t+H-1]
+        - N = T - L - H + 1
     """
-    T = arr.shape[0]
-    N = T - L - H + 1 
+    T, D = arr.shape
+    N = T - L - H + 1
     if N <= 0:
         raise ValueError(f"Not enough samples to make windows: T={T}, L={L}, H={H}")
-    # inputs
-    X = np.lib.stride_tricks.sliding_window_view(arr, window_shape=(L, arr.shape[1])[:-H, 0, : ])
-    #targets:assume the target is in the first column of y
-    yw = np.lib.stride_tricks.sliding_window_view(arr[:, 0], window_shape= H) # [T-H+1, H]
-    y = yw[L : L + N]
+
+    # Inputs: sliding windows over [T, D]
+    # For a 2D window, output shape is [T-L+1, 1, L, D]
+    sw = np.lib.stride_tricks.sliding_window_view(arr, window_shape=(L, D))
+    X = sw[:N, 0, :, :]  # [N, L, D]
+
+    # Targets: horizon windows over target column 0
+    # yw shape: [T-H+1, H]
+    yw = np.lib.stride_tricks.sliding_window_view(arr[:, 0], window_shape=H)
+    y = yw[L : L + N]    # [N, H]
+
     return X, y
 
 def make_seq_features(
@@ -217,7 +232,7 @@ def make_seq_features(
         ]
         feature_cols = [c for c in feature_cols if c in df.columns]
 
-    #group per zone, then windw; concatenate
+    #group per zone, then window; concatenate
     arrays_X, arrays_y, arrays_zone, arrays_mask = [],[],[],[]
     for zid, g in df.sort_values([zone_col, time_col]).groupby(zone_col):
         g = g.reset_index(drop=True)

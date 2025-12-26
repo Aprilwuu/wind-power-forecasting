@@ -1,5 +1,5 @@
 """
-Probablistic metrics for distributional / quantile forecasts.
+Probabilistic metrics for distributional / quantile forecasts.
 Includes:
 - Pinball Loss
 - Multi-quantile Pinball Loss
@@ -69,14 +69,14 @@ def pinball_loss_multi(
         raise ValueError("The number of rows of q_preds should be equal to the length of y_true.")
 
     if q_preds.shape[1] != len(quantiles):
-        raise ValueError("The number of columns of q_preds should be equal to the number of quaniles.")
+        raise ValueError("The number of columns of q_preds should be equal to the number of quantiles.")
     
     losses = []
     for j, q in enumerate(quantiles):
-        losses.append(pinball_loss(y_true, q_preds[: j], q))
+        losses.append(pinball_loss(y_true, q_preds[:, j], q))
     return float(np.mean(losses))
 
-def crps_ensemble(y_true, ArrayLike, ensemble_preds: np.ndarray) -> float:
+def crps_ensemble(y_true: ArrayLike, ensemble_preds: np.ndarray) -> float:
     """
     CRPS approximation using ensemble forecasts.
 
@@ -96,7 +96,7 @@ def crps_ensemble(y_true, ArrayLike, ensemble_preds: np.ndarray) -> float:
     F = np.asanyarray(ensemble_preds)
 
     if F.shape[0] != y_true.shape[0]:
-        raise ValueError("The number of rows of ensemble_pres should be equal to the length of y_true.")
+        raise ValueError("The number of rows of ensemble_preds should be equal to the length of y_true.")
     
     # |y - x_i|
     term1 = np.mean(np.abs(F - y_true[:, None]), axis=1)

@@ -1,0 +1,66 @@
+# configs/tcn_point_track2_smoke.yaml
+# Track2 smoke config (LOFO + inner time val)
+
+paths:
+  featured_dir: data/featured
+  reports_dir: reports/experiments
+
+data:
+  path: data/processed/gefcom_wind_all_zones.csv
+
+cols:
+  target_col: target
+  zone_col: zone_id
+  time_col: datetime
+  # group_col: zone_id   # optional, default fallback in runner/split
+
+# Track2 split
+split:
+  type: lofo
+  # This is the "inner validation" length inside each LOFO fold.
+  # Make it small for smoke; use LGBM Track2 config value for full run.
+  val_days: 30
+  # Keep small for smoke so it doesn't error on tiny folds
+  min_train: 1000
+  # group_col: zone_id   # optional
+
+# Sequence/windowing
+seq:
+  lookback: 168
+  horizon: 1
+  feature_cols: null
+  include_target_as_input: true
+  add_missing_mask: true
+
+# Keep zone embedding off for Track2 (simplify, match your plan)
+keep_zone: false
+zone_emb_dim: 8
+
+# Model
+model:
+  channels: [32, 64, 64]
+  kernel_size: 3
+  dropout: 0.2
+
+# Training (smoke: fast)
+train:
+  batch_size: 512
+  max_epochs: 8
+  patience: 2
+  lr: 0.001
+  weight_decay: 0.0
+  grad_clip: 1.0
+  device: mps   # optional
+  loss: huber
+  huber_delta: 1.0
+
+# Probabilistic (MC Dropout) - if your runner reads these flags
+prob:
+  use_mc_dropout: true
+  mc_runs: 20
+  quantiles: [0.05, 0.5, 0.95]
+
+# Candidates (optional; keep only baseline for smoke)
+candidates:
+  baseline: {}# configs/tcn_point_track2_smoke.yaml
+

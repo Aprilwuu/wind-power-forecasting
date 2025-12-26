@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.models.transformer import PositionalEncoding
+from src.models.deterministic.transformer import PositionalEncoding
 
 class BetaTimeSeriesTransformer(nn.Module):
     """

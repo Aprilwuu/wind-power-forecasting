@@ -15,7 +15,7 @@ sys.path.append(str(ROOT))
 from src.data.load import load_raw_data
 from src.data.make_dataset import make_dataset
 from src.features.build_features import make_seq_features
-from src.models.transformer import(
+from src.models.deterministic.transformer import(
     TimeSeriesTransformer,
     train_transformer,
     evaluate_on_loader,

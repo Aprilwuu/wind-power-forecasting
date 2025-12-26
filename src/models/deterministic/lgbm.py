@@ -50,19 +50,27 @@ class LGBMModel:
              raise ValueError("Models is not trained yet.")
         self.model.save_model(path)
 
-def create_lgbm_model() -> LGBMModel:
-     """
-     Factory used by train/loop.py
-     """
-     params = {
+
+def create_lgbm_model(params: dict | None = None, seed: int | None = None) -> LGBMModel:
+    base_params = {
         "objective": "regression",
         "metric": "rmse",
         "learning_rate": 0.05,
-        "num_leave": 64,
+        "num_leaves": 64,
         "feature_fraction": 0.8,
         "bagging_fraction": 0.8,
         "bagging_freq": 1,
         "verbosity": -1,
         "num_threads": -1,
-     }
-     return LGBMModel(params=params, num_boost_round=500)
+    }
+
+    if isinstance(params, dict):
+        base_params.update(params)
+
+    if seed is not None:
+        base_params.setdefault("seed", seed)
+        base_params.setdefault("data_random_seed", seed)
+        base_params.setdefault("feature_fraction_seed", seed)
+        base_params.setdefault("bagging_seed", seed)
+
+    return LGBMModel(params=base_params, num_boost_round=500)

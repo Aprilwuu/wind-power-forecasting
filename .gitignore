@@ -29,4 +29,8 @@ logs/
 *.tmp
 
 # VSCode
-.vscode/
+.vscode/.DS_Store
+
+# outputs
+reports/experiments/
+data/

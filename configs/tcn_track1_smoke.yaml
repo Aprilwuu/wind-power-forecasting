@@ -1,0 +1,59 @@
+# Track1 temporal - SMOKE (fast sanity check)
+
+paths:
+  artifacts_dir: artifacts/models
+  reports_dir: reports/experiments
+  featured_dir: data/featured
+
+data:
+  path: data/processed/gefcom_wind_all_zones.csv
+
+split:
+  type: temporal
+  train_cut: "2013-07-01"
+  val_cut: "2013-10-01"
+
+cols:
+  target_col: target
+  zone_col: zone_id
+  time_col: datetime
+  group_col: null
+
+seq:
+  lookback: 48          # smaller than 168 -> faster windowing/training
+  horizon: 1
+  feature_cols: null
+  include_target_as_input: true
+  add_missing_mask: true
+
+train:
+  batch_size: 256
+  max_epochs: 3         # smoke: very few epochs
+  patience: 1
+  lr: 0.001
+  weight_decay: 0.0
+  grad_clip: 1.0
+  device: null
+
+  # keep consistent with your "robust training" choice
+  loss: huber
+  huber_delta: 1.0
+
+model:
+  channels: [16, 16]    # smaller model for smoke
+  kernel_size: 3
+  dropout: 0.2
+
+# IMPORTANT:
+# - Track2 you plan keep_zone=false; for Track1 smoke we also keep it false for simplicity/fairness
+keep_zone: false
+zone_emb_dim: 8
+
+# Probabilistic inference via MC Dropout (optional in smoke)
+prob:
+  use_mc_dropout: true
+  mc_runs: 20
+  mc_quantiles: [0.05, 0.5, 0.95]
+
+candidates:
+  baseline: {}
