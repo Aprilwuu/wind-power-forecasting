@@ -1,20 +1,20 @@
-# src/experiments/run_deterministic_tcn.py
+# src/experiments/run_tcn.py
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import math
 from pathlib import Path
-import csv
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import yaml
 
 from src.data.load import load_raw_data
 from src.pipelines.tcn_pipeline import run_pipeline_any
-
+from src.utils.conformal_widening import conformal_widen_exp_dir
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,7 @@ def _deep_update(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, An
     """Recursively merge override into base (override wins)."""
     out = dict(base)
     for k, v in override.items():
-        if (
-            k in out
-            and isinstance(out[k], dict)
-            and isinstance(v, dict)
-        ):
+        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
             out[k] = _deep_update(out[k], v)
         else:
             out[k] = v
@@ -58,26 +54,20 @@ def _load_yaml(path: str | Path) -> Dict[str, Any]:
 
 
 def _resolve_out_root(cfg: Dict[str, Any]) -> Path:
-    # Support multiple config layouts
-    # Priority: cfg["paths"]["featured_dir"], then cfg["out_root"], else default to data/featured
     paths = cfg.get("paths", {}) if isinstance(cfg.get("paths", {}), dict) else {}
     out_root = paths.get("featured_dir") or cfg.get("out_root") or "data/featured"
     return Path(out_root).expanduser().resolve()
 
 
-# NEW: resolve reports root for experiment summaries
 def _resolve_reports_root(cfg: Dict[str, Any]) -> Path:
-    # Priority: cfg["paths"]["reports_dir"], then cfg["reports_root"], else default to reports/experiments
     paths = cfg.get("paths", {}) if isinstance(cfg.get("paths", {}), dict) else {}
-    reports_root = paths.get("reports_dir") or cfg.get("reports_root") or cfg.get("reports_root") or "reports/experiments"
+    reports_root = paths.get("reports_dir") or cfg.get("reports_root") or "reports/experiments"
     return Path(reports_root).expanduser().resolve()
 
 
-# Helper: write runs CSV
 def _write_runs_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
     if not rows:
         return
-    # Collect all keys
     all_keys = set()
     for row in rows:
         all_keys.update(row.keys())
@@ -86,13 +76,11 @@ def _write_runs_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
         writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
-            # Fill missing with ""
             row_filled = {k: row.get(k, "") for k in columns}
             writer.writerow(row_filled)
 
 
 def _resolve_data_path(cfg: Dict[str, Any]) -> Path:
-    # Support: cfg["data"]["path"] or cfg["data_path"]
     if isinstance(cfg.get("data"), dict) and cfg["data"].get("path"):
         return Path(cfg["data"]["path"]).expanduser().resolve()
     if cfg.get("data_path"):
@@ -101,10 +89,6 @@ def _resolve_data_path(cfg: Dict[str, Any]) -> Path:
 
 
 def _resolve_split(cfg: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-    """
-    Returns (split_type, split_cfg)
-      split_type in {"temporal", "lofo"}
-    """
     split_cfg = cfg.get("split", {}) if isinstance(cfg.get("split", {}), dict) else {}
     raw = (split_cfg.get("type") or split_cfg.get("split_type") or "temporal").lower()
 
@@ -113,7 +97,7 @@ def _resolve_split(cfg: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
     if raw in ("lofo", "track2", "track2_lofo"):
         return "lofo", split_cfg
 
-    # Fallback: if both train_cut and val_cut exist -> temporal; otherwise -> lofo
+    # Fallback
     if split_cfg.get("train_cut") and split_cfg.get("val_cut"):
         return "temporal", split_cfg
     if split_cfg.get("val_days") or split_cfg.get("held_out_group"):
@@ -123,17 +107,6 @@ def _resolve_split(cfg: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
 
 
 def _resolve_candidates(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """
-    Supported formats:
-      1) Mapping:
-           candidates:
-             baseline: {}
-             big: { model: {channels: [64, 64, 64]} }
-      2) List:
-           candidates:
-             - name: baseline
-               override: {...}
-    """
     cand = cfg.get("candidates", None)
     if cand is None:
         return {"baseline": {}}
@@ -168,7 +141,6 @@ def _choose_heldout_groups(
         return held_out_groups
 
     if n_groups is None:
-        # Default: evaluate the first 10 sites/zones
         n_groups = 10
 
     df = load_raw_data(str(data_path))
@@ -180,6 +152,108 @@ def _choose_heldout_groups(
     return zones[: int(n_groups)]
 
 
+def _get_dict(cfg: Dict[str, Any], *keys: str) -> Dict[str, Any]:
+    """Return the first existing dict among keys."""
+    for k in keys:
+        v = cfg.get(k, None)
+        if isinstance(v, dict):
+            return v
+    return {}
+
+
+def _get_model_tcn_block(model_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Support:
+      model:
+        tcn: {...}
+    OR older:
+      model: {channels, kernel_size, dropout}
+    """
+    tcn = model_cfg.get("tcn", None)
+    if isinstance(tcn, dict):
+        return tcn
+    return model_cfg
+
+
+def _resolve_loss(model_cfg: Dict[str, Any]) -> Tuple[str, float]:
+    """Support:
+      model:
+        train_loss: {name: huber, huber_delta: 1.0}
+    Returns (loss_name, huber_delta)
+    """
+    loss_cfg = model_cfg.get("train_loss", None)
+    if not isinstance(loss_cfg, dict):
+        return "mse", 1.0
+    name = str(loss_cfg.get("name", "mse")).lower().strip()
+    delta = float(loss_cfg.get("huber_delta", 1.0))
+    return name, delta
+
+
+def _qcol(q: float) -> str:
+    # 0.05 -> q05, 0.95 -> q95
+    return f"q{int(round(float(q) * 100)):02d}"
+
+
+def _run_conformal_if_needed(
+    *,
+    out_dir: str,
+    target_picp: float,
+    use_mc_dropout: bool,
+    mc_quantiles: Tuple[float, ...],
+) -> Dict[str, Any]:
+    """
+    Returns a dict with keys:
+      conformal_used, conformal_t, conformal_target_picp,
+      raw_val_picp, raw_test_picp, cal_val_picp, cal_test_picp,
+      cal_val_out, cal_test_out, lo_col, hi_col, conformal_error
+    """
+    base: Dict[str, Any] = {
+        "conformal_used": False,
+        "conformal_t": "",
+        "conformal_target_picp": "",
+        "raw_val_picp": "",
+        "raw_test_picp": "",
+        "cal_val_picp": "",
+        "cal_test_picp": "",
+        "cal_val_out": "",
+        "cal_test_out": "",
+        "lo_col": "",
+        "hi_col": "",
+        "conformal_error": "",
+    }
+    if not use_mc_dropout:
+        return base
+
+    lo_q = float(min(mc_quantiles))
+    hi_q = float(max(mc_quantiles))
+    lo_col = _qcol(lo_q)
+    hi_col = _qcol(hi_q)
+
+    base["lo_col"] = lo_col
+    base["hi_col"] = hi_col
+    base["conformal_used"] = True
+    base["conformal_target_picp"] = float(target_picp)
+
+    try:
+        cal = conformal_widen_exp_dir(
+            out_dir,
+            target_picp=float(target_picp),
+            y_col="y_true",
+            lo_col=lo_col,
+            hi_col=hi_col,
+        )
+        base["conformal_t"] = float(cal.get("t", math.nan))
+        base["raw_val_picp"] = float(cal["raw"]["val_picp"])
+        base["raw_test_picp"] = float(cal["raw"]["test_picp"])
+        base["cal_val_picp"] = float(cal["cal"]["val_picp"])
+        base["cal_test_picp"] = float(cal["cal"]["test_picp"])
+        base["cal_val_out"] = str(cal.get("val_out", ""))
+        base["cal_test_out"] = str(cal.get("test_out", ""))
+        return base
+    except Exception as e:
+        base["conformal_error"] = repr(e)
+        return base
+
+
 # -----------------------------
 # runner main
 # -----------------------------
@@ -189,7 +263,6 @@ def main() -> None:
     parser.add_argument("--exp_name", required=True, type=str)
     parser.add_argument("--seeds", nargs="+", type=int, required=True)
 
-    # Optional: run a subset of candidates
     parser.add_argument("--candidates", nargs="*", default=None)
 
     # Track2 helpers (LOFO)
@@ -213,22 +286,22 @@ def main() -> None:
     logger.info(f"Split type resolved: '{split_type}'")
 
     # Column names
-    cols_cfg = cfg.get("cols", {}) if isinstance(cfg.get("cols", {}), dict) else {}
+    cols_cfg = _get_dict(cfg, "cols")
     target_col = cols_cfg.get("target_col", "target")
     zone_col = cols_cfg.get("zone_col", "zone_id")
     time_col = cols_cfg.get("time_col", "datetime")
     group_col = cols_cfg.get("group_col", None)
 
-    # Sequence (windowing) config
-    seq_cfg = cfg.get("seq", {}) if isinstance(cfg.get("seq", {}), dict) else {}
+    # Sequence config
+    seq_cfg = _get_dict(cfg, "seq")
     lookback = int(seq_cfg.get("lookback", 168))
     horizon = int(seq_cfg.get("horizon", 1))
     feature_cols = seq_cfg.get("feature_cols", None)
     include_target_as_input = bool(seq_cfg.get("include_target_as_input", True))
     add_missing_mask = bool(seq_cfg.get("add_missing_mask", True))
 
-    # Training config
-    train_cfg = cfg.get("train", {}) if isinstance(cfg.get("train", {}), dict) else {}
+    # Training config (support training: or train:)
+    train_cfg = _get_dict(cfg, "training", "train")
     batch_size = int(train_cfg.get("batch_size", 256))
     max_epochs = int(train_cfg.get("max_epochs", 50))
     patience = int(train_cfg.get("patience", 8))
@@ -238,35 +311,28 @@ def main() -> None:
     device = train_cfg.get("device", None)
 
     # Model config
-    model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
-    channels = model_cfg.get("channels", [32, 64, 64])
-    kernel_size = int(model_cfg.get("kernel_size", 3))
-    dropout = float(model_cfg.get("dropout", 0.2))
+    model_cfg = _get_dict(cfg, "model")
+    tcn_cfg = _get_model_tcn_block(model_cfg)
+    channels = tcn_cfg.get("channels", [32, 64, 64])
+    kernel_size = int(tcn_cfg.get("kernel_size", 3))
+    dropout = float(tcn_cfg.get("dropout", 0.2))
 
-    # Probabilistic config (MC Dropout)
-    prob_cfg = cfg.get("prob", {}) if isinstance(cfg.get("prob", {}), dict) else {}
+    # Loss config (from model.train_loss)
+    loss_name, huber_delta = _resolve_loss(model_cfg)
+
+    # Probabilistic config
+    prob_cfg = _get_dict(cfg, "prob")
     use_mc_dropout = bool(prob_cfg.get("use_mc_dropout", False))
     mc_runs = int(prob_cfg.get("mc_runs", 50))
     mc_quantiles = tuple(prob_cfg.get("mc_quantiles", (0.05, 0.5, 0.95)))
+    target_picp = float(prob_cfg.get("target_picp", 0.9))  # <= NEW
 
-    # Optional zone embedding
-    keep_zone = bool(cfg.get("keep_zone", False))
-
-    # YAML may set zone_emb_dim: null when keep_zone=false. Avoid int(None) crash.
-    _raw_zone_emb_dim = cfg.get("zone_emb_dim", 8)
+    # Zone embedding (support both top-level keep_zone/zone_emb_dim and nested zone:)
+    keep_zone = bool(cfg.get("keep_zone", cfg.get("zone", {}).get("keep_zone", False)))
+    _raw_zone_emb_dim = cfg.get("zone_emb_dim", cfg.get("zone", {}).get("zone_emb_dim", 8))
     if _raw_zone_emb_dim is None:
         _raw_zone_emb_dim = 8
     zone_emb_dim = int(_raw_zone_emb_dim)
-
-    # Track1 (temporal) split params
-    train_cut = split_cfg.get("train_cut", None)
-    val_cut = split_cfg.get("val_cut", None)
-
-    # Track2 (LOFO) split params
-    val_days = split_cfg.get("val_days", None)
-    min_train = int(split_cfg.get("min_train", 1000))
-    if group_col is None:
-        group_col = split_cfg.get("group_col", None)
 
     # Candidates
     candidates = _resolve_candidates(cfg)
@@ -281,19 +347,19 @@ def main() -> None:
     reports_exp_dir = (reports_root / args.exp_name).resolve()
     reports_exp_dir.mkdir(parents=True, exist_ok=True)
 
-    # Track2 held-out groups (if needed)
+    # Track2 held-out groups (based on base cfg; candidate override can still filter via args.held_out_groups)
     heldout_list: List[Union[int, str]] = []
     if split_type == "lofo":
         parsed = None
         if args.held_out_groups:
-            # Try to parse numeric zone ids as int; otherwise keep as str
-            tmp = []
+            tmp: List[Union[int, str]] = []
             for x in args.held_out_groups:
                 try:
                     tmp.append(int(x))
                 except Exception:
                     tmp.append(x)
             parsed = tmp
+
         heldout_list = _choose_heldout_groups(
             data_path=data_path,
             zone_col=zone_col,
@@ -307,21 +373,27 @@ def main() -> None:
 
     # Run loop
     for cand_name, cand_override in candidates.items():
-        # Candidate overrides can modify seq/train/model/keep_zone, etc.
+        # Normalize for override (candidate can override split/seq/train/model/prob/etc.)
         merged_cfg = _deep_update(
             {
                 "seq": seq_cfg,
-                "train": train_cfg,
+                "train": train_cfg,  # canonical key
                 "model": model_cfg,
+                "prob": prob_cfg,
                 "keep_zone": keep_zone,
                 "zone_emb_dim": zone_emb_dim,
-                "cols": {"target_col": target_col, "zone_col": zone_col, "time_col": time_col, "group_col": group_col},
+                "cols": {
+                    "target_col": target_col,
+                    "zone_col": zone_col,
+                    "time_col": time_col,
+                    "group_col": group_col,
+                },
                 "split": split_cfg,
             },
             cand_override or {},
         )
 
-        # Re-resolve merged values (candidate-level)
+        # Candidate-level resolve
         _keep_zone = bool(merged_cfg.get("keep_zone", keep_zone))
         _zone_emb_dim = int(merged_cfg.get("zone_emb_dim", zone_emb_dim))
 
@@ -342,20 +414,31 @@ def main() -> None:
         _device = _train.get("device", device)
 
         _model = merged_cfg.get("model", {}) or {}
-        _channels = _model.get("channels", channels)
-        _kernel_size = int(_model.get("kernel_size", kernel_size))
-        _dropout = float(_model.get("dropout", dropout))
+        _tcn = _get_model_tcn_block(_model)
+        _channels = _tcn.get("channels", channels)
+        _kernel_size = int(_tcn.get("kernel_size", kernel_size))
+        _dropout = float(_tcn.get("dropout", dropout))
+        _loss_name, _huber_delta = _resolve_loss(_model)
 
-        # Probabilistic config (candidate override)
         _prob = merged_cfg.get("prob", {}) or {}
         _use_mc_dropout = bool(_prob.get("use_mc_dropout", use_mc_dropout))
         _mc_runs = int(_prob.get("mc_runs", mc_runs))
         _mc_quantiles = tuple(_prob.get("mc_quantiles", mc_quantiles))
+        _target_picp = float(_prob.get("target_picp", target_picp))
+
+        _split = merged_cfg.get("split", {}) or {}
+
+        # IMPORTANT FIX: split values should also be override-able per candidate
+        _train_cut = _split.get("train_cut", None)
+        _val_cut = _split.get("val_cut", None)
+        _val_days = _split.get("val_days", None)
+        _min_train = int(_split.get("min_train", 1000))
+        _group_col = _split.get("group_col", None) or group_col
 
         for seed in args.seeds:
             if split_type == "temporal":
-                if not train_cut or not val_cut:
-                    raise ValueError("Track1 temporal requires split.train_cut and split.val_cut in YAML.")
+                if not _train_cut or not _val_cut:
+                    raise ValueError("Track1 temporal requires split.train_cut and split.val_cut in YAML (or candidate override).")
 
                 out_dir = artifact_exp_dir / cand_name / f"seed_{seed}"
                 logger.info(
@@ -365,8 +448,8 @@ def main() -> None:
                 result = run_pipeline_any(
                     data_path=str(data_path),
                     out_dir=str(out_dir),
-                    train_cut=str(train_cut),
-                    val_cut=str(val_cut),
+                    train_cut=str(_train_cut),
+                    val_cut=str(_val_cut),
                     lookback=_lookback,
                     horizon=_horizon,
                     feature_cols=_feature_cols,
@@ -385,6 +468,8 @@ def main() -> None:
                     weight_decay=_weight_decay,
                     grad_clip=_grad_clip,
                     device=_device,
+                    loss_name=_loss_name,
+                    huber_delta=_huber_delta,
                     channels=_channels,
                     kernel_size=_kernel_size,
                     dropout=_dropout,
@@ -393,30 +478,51 @@ def main() -> None:
                     mc_quantiles=_mc_quantiles,
                 )
 
-                runs.append(
-                    {
-                        "candidate": cand_name,
-                        "seed": seed,
-                        "val_rmse": result.metrics["val"]["rmse"],
-                        "val_mae": result.metrics["val"]["mae"],
-                        "val_r2": result.metrics["val"]["r2"],
-                        "test_rmse": result.metrics["test"]["rmse"],
-                        "test_mae": result.metrics["test"]["mae"],
-                        "test_r2": result.metrics["test"]["r2"],
-                        "pipeline_out_dir": result.out_dir,
-                        "pipeline_model_path": result.model_path,
-                        "pipeline_metrics_path": result.metrics_path,
-                        "param_overrides": json.dumps(cand_override or {}, ensure_ascii=False),
-                        "use_mc_dropout": bool(_use_mc_dropout),
-                        "mc_runs": int(_mc_runs),
-                        "mc_quantiles": list(_mc_quantiles),
-                    }
+                conf = _run_conformal_if_needed(
+                    out_dir=result.out_dir,
+                    target_picp=_target_picp,
+                    use_mc_dropout=_use_mc_dropout,
+                    mc_quantiles=_mc_quantiles,
                 )
+                if conf["conformal_used"] and not conf["conformal_error"]:
+                    logger.info(
+                        f"[conformal][track1] lo={conf['lo_col']} hi={conf['hi_col']} | t={conf['conformal_t']:.6f} "
+                        f"| raw_val={conf['raw_val_picp']:.3f} raw_test={conf['raw_test_picp']:.3f} "
+                        f"| cal_val={conf['cal_val_picp']:.3f} cal_test={conf['cal_test_picp']:.3f}"
+                    )
+                elif conf["conformal_used"] and conf["conformal_error"]:
+                    logger.warning(f"[conformal][track1] failed: {conf['conformal_error']}")
+
+                row = {
+                    "candidate": cand_name,
+                    "seed": seed,
+                    "val_rmse": result.metrics["val"]["rmse"],
+                    "val_mae": result.metrics["val"]["mae"],
+                    "val_r2": result.metrics["val"]["r2"],
+                    "test_rmse": result.metrics["test"]["rmse"],
+                    "test_mae": result.metrics["test"]["mae"],
+                    "test_r2": result.metrics["test"]["r2"],
+                    "pipeline_out_dir": result.out_dir,
+                    "pipeline_model_path": result.model_path,
+                    "pipeline_metrics_path": result.metrics_path,
+                    "param_overrides": json.dumps(cand_override or {}, ensure_ascii=False),
+                    "use_mc_dropout": bool(_use_mc_dropout),
+                    "mc_runs": int(_mc_runs),
+                    "mc_quantiles": list(_mc_quantiles),
+                    "target_picp": float(_target_picp),
+                    "loss_name": _loss_name,
+                    "huber_delta": float(_huber_delta),
+                    # conformal fields
+                    **conf,
+                }
+                runs.append(row)
 
             else:
                 # Track2 LOFO
-                if val_days is None:
-                    raise ValueError("Track2 lofo requires split.val_days in YAML.")
+                if _val_days is None:
+                    raise ValueError("Track2 lofo requires split.val_days in YAML (or candidate override).")
+                if not _group_col:
+                    raise ValueError("Track2 lofo requires split.group_col (or cols.group_col).")
 
                 for g in heldout_list:
                     out_dir = artifact_exp_dir / cand_name / f"heldout_{g}" / f"seed_{seed}"
@@ -428,9 +534,9 @@ def main() -> None:
                         data_path=str(data_path),
                         out_dir=str(out_dir),
                         held_out_group=g,
-                        group_col=group_col,
-                        val_days=int(val_days),
-                        min_train=int(min_train),
+                        group_col=_group_col,
+                        val_days=int(_val_days),
+                        min_train=int(_min_train),
                         lookback=_lookback,
                         horizon=_horizon,
                         feature_cols=_feature_cols,
@@ -449,6 +555,8 @@ def main() -> None:
                         weight_decay=_weight_decay,
                         grad_clip=_grad_clip,
                         device=_device,
+                        loss_name=_loss_name,
+                        huber_delta=_huber_delta,
                         channels=_channels,
                         kernel_size=_kernel_size,
                         dropout=_dropout,
@@ -457,26 +565,45 @@ def main() -> None:
                         mc_quantiles=_mc_quantiles,
                     )
 
-                    runs.append(
-                        {
-                            "candidate": cand_name,
-                            "held_out_group": g,
-                            "seed": seed,
-                            "inner_val_rmse": result.metrics["inner_val"]["rmse"],
-                            "inner_val_mae": result.metrics["inner_val"]["mae"],
-                            "inner_val_r2": result.metrics["inner_val"]["r2"],
-                            "outer_test_rmse": result.metrics["outer_test"]["rmse"],
-                            "outer_test_mae": result.metrics["outer_test"]["mae"] if "outer_test_mae" in result.metrics else result.metrics["outer_test"]["mae"],
-                            "outer_test_r2": result.metrics["outer_test"]["r2"],
-                            "pipeline_out_dir": result.out_dir,
-                            "pipeline_model_path": result.model_path,
-                            "pipeline_metrics_path": result.metrics_path,
-                            "param_overrides": json.dumps(cand_override or {}, ensure_ascii=False),
-                            "use_mc_dropout": bool(_use_mc_dropout),
-                            "mc_runs": int(_mc_runs),
-                            "mc_quantiles": list(_mc_quantiles),
-                        }
+                    conf = _run_conformal_if_needed(
+                        out_dir=result.out_dir,
+                        target_picp=_target_picp,
+                        use_mc_dropout=_use_mc_dropout,
+                        mc_quantiles=_mc_quantiles,
                     )
+                    if conf["conformal_used"] and not conf["conformal_error"]:
+                        logger.info(
+                            f"[conformal][track2] heldout={g} | t={conf['conformal_t']:.6f} "
+                            f"| raw_val={conf['raw_val_picp']:.3f} raw_test={conf['raw_test_picp']:.3f} "
+                            f"| cal_val={conf['cal_val_picp']:.3f} cal_test={conf['cal_test_picp']:.3f}"
+                        )
+                    elif conf["conformal_used"] and conf["conformal_error"]:
+                        logger.warning(f"[conformal][track2] heldout={g} failed: {conf['conformal_error']}")
+
+                    row = {
+                        "candidate": cand_name,
+                        "held_out_group": g,
+                        "seed": seed,
+                        "inner_val_rmse": result.metrics["inner_val"]["rmse"],
+                        "inner_val_mae": result.metrics["inner_val"]["mae"],
+                        "inner_val_r2": result.metrics["inner_val"]["r2"],
+                        "outer_test_rmse": result.metrics["outer_test"]["rmse"],
+                        "outer_test_mae": result.metrics["outer_test"]["mae"],
+                        "outer_test_r2": result.metrics["outer_test"]["r2"],
+                        "pipeline_out_dir": result.out_dir,
+                        "pipeline_model_path": result.model_path,
+                        "pipeline_metrics_path": result.metrics_path,
+                        "param_overrides": json.dumps(cand_override or {}, ensure_ascii=False),
+                        "use_mc_dropout": bool(_use_mc_dropout),
+                        "mc_runs": int(_mc_runs),
+                        "mc_quantiles": list(_mc_quantiles),
+                        "target_picp": float(_target_picp),
+                        "loss_name": _loss_name,
+                        "huber_delta": float(_huber_delta),
+                        # conformal fields
+                        **conf,
+                    }
+                    runs.append(row)
 
     # -----------------------------
     # summarize
@@ -487,51 +614,61 @@ def main() -> None:
         if not cand_runs:
             continue
 
-        if split_type == "temporal":
-            val_rmse = [float(r["val_rmse"]) for r in cand_runs]
-            val_mae = [float(r["val_mae"]) for r in cand_runs]
-            val_r2 = [float(r["val_r2"]) for r in cand_runs]
-            test_rmse = [float(r["test_rmse"]) for r in cand_runs]
-            test_mae = [float(r["test_mae"]) for r in cand_runs]
-            test_r2 = [float(r["test_r2"]) for r in cand_runs]
+        def _safe_float_list(key: str) -> List[float]:
+            xs = []
+            for r in cand_runs:
+                v = r.get(key, "")
+                if v == "" or v is None:
+                    continue
+                try:
+                    xs.append(float(v))
+                except Exception:
+                    continue
+            return xs
 
+        if split_type == "temporal":
             by_candidate[cand_name] = {
                 "n_runs": len(cand_runs),
                 "val": {
-                    "rmse": _summarize(val_rmse),
-                    "mae": _summarize(val_mae),
-                    "r2": _summarize(val_r2),
+                    "rmse": _summarize(_safe_float_list("val_rmse")),
+                    "mae": _summarize(_safe_float_list("val_mae")),
+                    "r2": _summarize(_safe_float_list("val_r2")),
                 },
                 "test": {
-                    "rmse": _summarize(test_rmse),
-                    "mae": _summarize(test_mae),
-                    "r2": _summarize(test_r2),
+                    "rmse": _summarize(_safe_float_list("test_rmse")),
+                    "mae": _summarize(_safe_float_list("test_mae")),
+                    "r2": _summarize(_safe_float_list("test_r2")),
+                },
+                "conformal": {
+                    "t": _summarize(_safe_float_list("conformal_t")),
+                    "raw_val_picp": _summarize(_safe_float_list("raw_val_picp")),
+                    "raw_test_picp": _summarize(_safe_float_list("raw_test_picp")),
+                    "cal_val_picp": _summarize(_safe_float_list("cal_val_picp")),
+                    "cal_test_picp": _summarize(_safe_float_list("cal_test_picp")),
                 },
             }
-
         else:
-            iv_rmse = [float(r["inner_val_rmse"]) for r in cand_runs]
-            iv_mae = [float(r["inner_val_mae"]) for r in cand_runs]
-            iv_r2 = [float(r["inner_val_r2"]) for r in cand_runs]
-            ot_rmse = [float(r["outer_test_rmse"]) for r in cand_runs]
-            ot_mae = [float(r["outer_test_mae"]) for r in cand_runs]
-            ot_r2 = [float(r["outer_test_r2"]) for r in cand_runs]
-
             by_candidate[cand_name] = {
                 "n_runs": len(cand_runs),
                 "inner_val": {
-                    "rmse": _summarize(iv_rmse),
-                    "mae": _summarize(iv_mae),
-                    "r2": _summarize(iv_r2),
+                    "rmse": _summarize(_safe_float_list("inner_val_rmse")),
+                    "mae": _summarize(_safe_float_list("inner_val_mae")),
+                    "r2": _summarize(_safe_float_list("inner_val_r2")),
                 },
                 "outer_test": {
-                    "rmse": _summarize(ot_rmse),
-                    "mae": _summarize(ot_mae),
-                    "r2": _summarize(ot_r2),
+                    "rmse": _summarize(_safe_float_list("outer_test_rmse")),
+                    "mae": _summarize(_safe_float_list("outer_test_mae")),
+                    "r2": _summarize(_safe_float_list("outer_test_r2")),
+                },
+                "conformal": {
+                    "t": _summarize(_safe_float_list("conformal_t")),
+                    "raw_val_picp": _summarize(_safe_float_list("raw_val_picp")),
+                    "raw_test_picp": _summarize(_safe_float_list("raw_test_picp")),
+                    "cal_val_picp": _summarize(_safe_float_list("cal_val_picp")),
+                    "cal_test_picp": _summarize(_safe_float_list("cal_test_picp")),
                 },
             }
 
-    # top-level summary
     summary: Dict[str, Any] = {
         "experiment": args.exp_name,
         "protocol": "track1_temporal" if split_type == "temporal" else "track2_lofo",
@@ -543,44 +680,19 @@ def main() -> None:
         "use_mc_dropout": bool(use_mc_dropout),
         "mc_runs": int(mc_runs),
         "mc_quantiles": list(mc_quantiles),
+        "target_picp": float(target_picp),
         "runs": runs,
         "by_candidate": by_candidate,
-        # Add artifact and reports roots/dirs for traceability
         "artifact_root": str(out_root),
         "reports_root": str(reports_root),
         "artifact_exp_dir": str(artifact_exp_dir),
         "reports_exp_dir": str(reports_exp_dir),
     }
 
-    # also add aggregate at root 
-    if split_type == "temporal":
-        summary["val"] = {
-            "rmse": _summarize([float(r["val_rmse"]) for r in runs]),
-            "mae": _summarize([float(r["val_mae"]) for r in runs]),
-            "r2": _summarize([float(r["val_r2"]) for r in runs]),
-        }
-        summary["test"] = {
-            "rmse": _summarize([float(r["test_rmse"]) for r in runs]),
-            "mae": _summarize([float(r["test_mae"]) for r in runs]),
-            "r2": _summarize([float(r["test_r2"]) for r in runs]),
-        }
-    else:
-        summary["val"] = {  # Use inner_val to align with the previous quantile runner's "val"
-            "rmse": _summarize([float(r["inner_val_rmse"]) for r in runs]),
-            "mae": _summarize([float(r["inner_val_mae"]) for r in runs]),
-            "r2": _summarize([float(r["inner_val_r2"]) for r in runs]),
-        }
-        summary["test"] = {  # Use outer_test to align with the previous quantile runner's "test"
-            "rmse": _summarize([float(r["outer_test_rmse"]) for r in runs]),
-            "mae": _summarize([float(r["outer_test_mae"]) for r in runs]),
-            "r2": _summarize([float(r["outer_test_r2"]) for r in runs]),
-        }
-
     summary_path = reports_exp_dir / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info(f"Saved summary -> {summary_path}")
 
-    # Optionally write runs.csv if runs exist
     if runs:
         runs_csv_path = reports_exp_dir / "runs.csv"
         _write_runs_csv(runs_csv_path, runs)

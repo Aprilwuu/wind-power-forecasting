@@ -5,12 +5,19 @@ paths:
 data:
   path: data/processed/gefcom_wind_all_zones.csv
 
+# --------------------
+# Split: Track 2 LOFO + inner time val
+# --------------------
 split:
-  type: temporal
-  train_cut: "2013-07-01"
-  val_cut: "2013-10-01"
-  group_col: null
+  type: lofo
+  # Track2 必填
+  val_days: 30          
+  min_train: 1000
+  group_col: zone_id    
 
+# --------------------
+# Sequence construction
+# --------------------
 seq:
   lookback: 168
   horizon: 1
@@ -18,18 +25,22 @@ seq:
   include_target_as_input: true
   add_missing_mask: true
 
-keep_zone: true
-zone_emb_dim: 8
-
+# --------------------
+# Model: TCN
+# --------------------
 model:
   tcn:
     channels: [32, 64, 64]
     kernel_size: 3
     dropout: 0.2
+
   train_loss:
     name: huber
     huber_delta: 1.0
 
+# --------------------
+# Training
+# --------------------
 training:
   batch_size: 256
   max_epochs: 50
@@ -39,6 +50,9 @@ training:
   grad_clip: 1.0
   device: cuda
 
+# --------------------
+# Probabilistic inference (MC Dropout)
+# --------------------
 prob:
   use_mc_dropout: true
   mc_runs: 500

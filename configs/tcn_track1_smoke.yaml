@@ -1,9 +1,10 @@
-# Track1 temporal - SMOKE (fast sanity check)
+# configs/tcn_track1_mc500_huber.yaml
+# Track 1 (temporal) | Deterministic TCN + MC Dropout | Huber loss
+# Runs are controlled by runner CLI: --exp_name and --seeds
 
 paths:
-  artifacts_dir: artifacts/models
-  reports_dir: reports/experiments
   featured_dir: data/featured
+  reports_dir: reports/experiments
 
 data:
   path: data/processed/gefcom_wind_all_zones.csv
@@ -12,48 +13,38 @@ split:
   type: temporal
   train_cut: "2013-07-01"
   val_cut: "2013-10-01"
-
-cols:
-  target_col: target
-  zone_col: zone_id
-  time_col: datetime
-  group_col: null
+  group_col: null   # not used in track1 temporal
 
 seq:
-  lookback: 48          # smaller than 168 -> faster windowing/training
+  lookback: 168
   horizon: 1
   feature_cols: null
   include_target_as_input: true
   add_missing_mask: true
 
-train:
+keep_zone: true
+zone_emb_dim: 8
+
+model:
+  tcn:
+    channels: [32, 64, 64]
+    kernel_size: 3
+    dropout: 0.2
+
+  train_loss:
+    name: huber
+    huber_delta: 1.0
+
+training:
   batch_size: 256
-  max_epochs: 3         # smoke: very few epochs
+  max_epochs: 3
   patience: 1
   lr: 0.001
   weight_decay: 0.0
   grad_clip: 1.0
-  device: null
+  device: cuda
 
-  # keep consistent with your "robust training" choice
-  loss: huber
-  huber_delta: 1.0
-
-model:
-  channels: [16, 16]    # smaller model for smoke
-  kernel_size: 3
-  dropout: 0.2
-
-# IMPORTANT:
-# - Track2 you plan keep_zone=false; for Track1 smoke we also keep it false for simplicity/fairness
-keep_zone: false
-zone_emb_dim: 8
-
-# Probabilistic inference via MC Dropout (optional in smoke)
 prob:
   use_mc_dropout: true
-  mc_runs: 20
+  mc_runs: 10
   mc_quantiles: [0.05, 0.5, 0.95]
-
-candidates:
-  baseline: {}

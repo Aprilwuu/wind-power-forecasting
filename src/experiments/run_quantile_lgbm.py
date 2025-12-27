@@ -3,7 +3,6 @@ run_quantile_lgbm.py
 
 Quantile (probabilistic) LightGBM experiment runner.
 
-
 Typical usage (from project root):
     python -m src.experiments.run_quantile_lgbm \
         --config configs/base.yaml \
@@ -26,8 +25,6 @@ import numpy as np
 import pandas as pd
 import yaml
 
-
-from src.utils.config import load_config
 from src.data.load import load_raw_data
 
 # -----------------------------------------------------------------------------
@@ -54,14 +51,13 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # Utility helpers
 # -----------------------------------------------------------------------------
-
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
 def _write_json(path: Path, obj: Dict[str, Any]) -> None:
     _ensure_dir(path.parent)
-    path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
@@ -127,7 +123,6 @@ def _coerce_float_list(xs: Any, name: str) -> List[float]:
 # -----------------------------------------------------------------------------
 # Main runner logic
 # -----------------------------------------------------------------------------
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Quantile LGBM experiment runner")
     parser.add_argument(
@@ -155,7 +150,7 @@ def main() -> None:
         nargs="*",
         default=None,
         help="Quantiles to train, e.g. --quantiles 0.3 0.5 0.7. "
-             "If omitted, try reading from YAML (probabilistic.quantiles / model.quantiles).",
+        "If omitted, try reading from YAML (probabilistic.quantiles / model.quantiles).",
     )
     parser.add_argument(
         "--keep_zone",
@@ -172,29 +167,22 @@ def main() -> None:
     parser.set_defaults(keep_zone_override=None)
 
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 
     config_path = Path(args.config)
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
-    cfg = load_config(str(config_path))
-
-    # fallback read yaml if load_config drops keys
-    cfg = cfg or {}
-    if cfg.get("split") is None:
-        logger.info(
-            "load_config() returned cfg without 'split'. Falling back to yaml.safe_load on the provided file."
-        )
-        with config_path.open("r", encoding="utf-8") as f:
-            raw_cfg = yaml.safe_load(f) or {}
-        if not isinstance(raw_cfg, dict):
-            raise TypeError("YAML config did not parse into a dict")
-        cfg.update(raw_cfg)
-        logger.info(f"After fallback load, cfg keys: {sorted(cfg.keys())}")
+    with config_path.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    if not isinstance(cfg, dict):
+        raise TypeError("YAML config did not parse into a dict")
 
     project_root = Path(__file__).resolve().parents[2]
 
+    # ------------------------------------------------------------------
+    # exp_name + output root
+    # ------------------------------------------------------------------
     exp_name = args.exp_name
     if exp_name is None:
         if isinstance(cfg.get("output"), dict) and cfg["output"].get("experiment_name"):
@@ -217,7 +205,6 @@ def main() -> None:
             quantiles = q_from_cfg
 
     if quantiles is None:
-        # default fallback
         quantiles = [0.1, 0.5, 0.9]
 
     quantiles = _coerce_float_list(quantiles, "quantiles")
@@ -236,6 +223,8 @@ def main() -> None:
     # Read run inputs from YAML
     # ------------------------------------------------------------------
     data_cfg = cfg.get("data", {}) if isinstance(cfg.get("data"), dict) else {}
+    feat_cfg = cfg.get("features", {}) if isinstance(cfg.get("features"), dict) else {}
+    output_cfg = cfg.get("output", {}) if isinstance(cfg.get("output"), dict) else {}
 
     raw_split = cfg.get("split")
     if isinstance(raw_split, dict):
@@ -246,22 +235,14 @@ def main() -> None:
         split_cfg = {}
     logger.info(f"Loaded split config: {split_cfg!r}")
 
-    feat_cfg = cfg.get("features", {}) if isinstance(cfg.get("features"), dict) else {}
-    output_cfg = cfg.get("output", {}) if isinstance(cfg.get("output"), dict) else {}
-
     data_path_raw = data_cfg.get("combined_data_path") or data_cfg.get("input_path")
     if not data_path_raw:
-        raise KeyError(
-            "Missing data path in config. Set data.combined_data_path (or data.input_path)."
-        )
+        raise KeyError("Missing data path in config. Set data.combined_data_path (or data.input_path).")
 
-    # IMPORTANT: resolve relative paths against the PROJECT ROOT, not the configs/ directory.
-    # This makes runs stable no matter where you launch the command from.
+    # IMPORTANT: resolve relative paths against the PROJECT ROOT, not configs/
     data_path = Path(str(data_path_raw))
     if not data_path.is_absolute():
-        # Prefer project-root-relative (recommended)
         cand1 = (project_root / data_path).resolve()
-        # Backward-compat: some older configs were written relative to configs/
         cand2 = (config_path.parent.resolve() / data_path).resolve()
         if cand1.exists():
             data_path = cand1
@@ -277,18 +258,13 @@ def main() -> None:
     else:
         data_path = data_path.resolve()
 
-    data_path = str(data_path)
+    data_path_str = str(data_path)
 
     target_col = str(data_cfg.get("target_col") or data_cfg.get("target") or "target")
     zone_col = str(data_cfg.get("zone_col") or data_cfg.get("group_col") or "zone_id")
     time_col = str(data_cfg.get("time_col") or "datetime")
 
-    split_type_raw = (
-        split_cfg.get("type")
-        or split_cfg.get("protocol")
-        or split_cfg.get("split_type")
-        or "temporal"
-    )
+    split_type_raw = split_cfg.get("type") or split_cfg.get("protocol") or split_cfg.get("split_type") or "temporal"
     split_type = str(split_type_raw).strip().strip('"').strip("'")
     split_type_norm = split_type.lower()
     is_track2_lofo = split_type_norm in {
@@ -332,16 +308,11 @@ def main() -> None:
         if isinstance(cfg_groups, list) and len(cfg_groups) > 0:
             held_out_groups = cfg_groups
         else:
-            logger.info(
-                f"Inferring LOFO groups from data column: {group_col} (will fallback to load_raw_data normalization if needed)"
-            )
+            logger.info(f"Inferring LOFO groups from data column: {group_col}")
             try:
-                # Fast path: if the CSV already contains the normalized column name (e.g. 'zone_id'), this is cheap.
-                tmp = pd.read_csv(data_path, usecols=[group_col])
+                tmp = pd.read_csv(data_path_str, usecols=[group_col])
                 held_out_groups = sorted(tmp[group_col].dropna().unique().tolist())
             except ValueError:
-                # Fallback: the raw dataset header may be uppercase (e.g. 'ZONEID').
-                # load_raw_data() normalizes names (ZONEID->zone_id, TIMESTAMP->datetime, TARGETVAR->target).
                 df_norm = load_raw_data(str(data_path))
                 if group_col not in df_norm.columns:
                     raise ValueError(
@@ -362,7 +333,7 @@ def main() -> None:
         pipeline_root = (project_root / pipeline_root).resolve()
 
     # ------------------------------------------------------------------
-    # Candidate grid (same pattern as deterministic runner)
+    # Candidate grid
     # ------------------------------------------------------------------
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model"), dict) else {}
     base_params = model_cfg.get("base_params", {}) if isinstance(model_cfg.get("base_params"), dict) else {}
@@ -393,16 +364,14 @@ def main() -> None:
 
             if is_track2_lofo:
                 for held_out in held_out_groups:
-                    pipeline_out_dir = (
-                        pipeline_root / exp_name / cand_name / f"heldout_{held_out}" / f"seed_{seed}"
-                    )
+                    pipeline_out_dir = pipeline_root / exp_name / cand_name / f"heldout_{held_out}" / f"seed_{seed}"
                     logger.info(
                         f"Running Track2 LOFO (quantile) | candidate={cand_name} | heldout={held_out} | "
                         f"seed={seed} | quantiles={quantiles} | out_dir={pipeline_out_dir}"
                     )
 
                     result = _pipeline_track2(
-                        data_path=data_path,
+                        data_path=data_path_str,
                         out_dir=pipeline_out_dir,
                         held_out_group=held_out,
                         val_days=val_days,
@@ -435,9 +404,6 @@ def main() -> None:
 
                     val = metrics.get("inner_val", {})
                     test = metrics.get("outer_test", {})
-                    # optional: coverage block (if pipeline outputs it)
-                    cov = metrics.get("coverage") or metrics.get("intervals") or {}
-                    cov_json = json.dumps(cov, sort_keys=True) if isinstance(cov, dict) else None
 
                     run_rows.append(
                         {
@@ -449,10 +415,9 @@ def main() -> None:
                             "val_crossing_rate": val.get("crossing_rate"),
                             "test_pinball_mean": test.get("pinball_mean"),
                             "test_crossing_rate": test.get("crossing_rate"),
-                            "coverage": cov_json,
-                            "pipeline_out_dir": out_dir,
+                            "pipeline_out_dir": str(out_dir) if out_dir is not None else None,
                             "pipeline_model_paths": json.dumps(model_paths, sort_keys=True) if model_paths else None,
-                            "pipeline_metrics_path": metrics_path,
+                            "pipeline_metrics_path": str(metrics_path) if metrics_path is not None else None,
                             "param_overrides": json.dumps(overrides, sort_keys=True),
                         }
                     )
@@ -464,7 +429,7 @@ def main() -> None:
                 )
 
                 result = _pipeline_track1(
-                    data_path=data_path,
+                    data_path=data_path_str,
                     out_dir=pipeline_out_dir,
                     train_cut=train_cut,
                     val_cut=val_cut,
@@ -496,10 +461,6 @@ def main() -> None:
                 val = metrics.get("val", {})
                 test = metrics.get("test", {})
 
-                # optional: coverage block (if pipeline outputs it)
-                cov = metrics.get("coverage") or metrics.get("intervals") or {}
-                cov_json = json.dumps(cov, sort_keys=True) if isinstance(cov, dict) else None
-
                 run_rows.append(
                     {
                         "candidate": cand_name,
@@ -509,10 +470,9 @@ def main() -> None:
                         "val_crossing_rate": val.get("crossing_rate"),
                         "test_pinball_mean": test.get("pinball_mean"),
                         "test_crossing_rate": test.get("crossing_rate"),
-                        "coverage": cov_json,
-                        "pipeline_out_dir": out_dir,
+                        "pipeline_out_dir": str(out_dir) if out_dir is not None else None,
                         "pipeline_model_paths": json.dumps(model_paths, sort_keys=True) if model_paths else None,
-                        "pipeline_metrics_path": metrics_path,
+                        "pipeline_metrics_path": str(metrics_path) if metrics_path is not None else None,
                         "param_overrides": json.dumps(overrides, sort_keys=True),
                     }
                 )
@@ -524,61 +484,6 @@ def main() -> None:
     test_pinball_mean = [float(r["test_pinball_mean"]) for r in run_rows if r["test_pinball_mean"] is not None]
     val_cross = [float(r["val_crossing_rate"]) for r in run_rows if r["val_crossing_rate"] is not None]
     test_cross = [float(r["test_crossing_rate"]) for r in run_rows if r["test_crossing_rate"] is not None]
-
-    def _extract_default_cov_width(cov_obj: Any) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
-        """Return (val_cov, val_width, test_cov, test_width) from a coverage/intervals dict.
-
-        Supports Track1 keys (val/test) and Track2 keys (inner_val/outer_test).
-        """
-        if not isinstance(cov_obj, dict) or not cov_obj:
-            return None, None, None, None
-        d = cov_obj.get("default")
-        if not isinstance(d, dict):
-            # fallback: pick first interval if 'default' missing
-            try:
-                d = next(iter(cov_obj.values()))
-            except Exception:
-                return None, None, None, None
-            if not isinstance(d, dict):
-                return None, None, None, None
-
-        val_sec = d.get("val") or d.get("inner_val") or {}
-        test_sec = d.get("test") or d.get("outer_test") or {}
-
-        val_cov = val_sec.get("coverage") if isinstance(val_sec, dict) else None
-        val_w = val_sec.get("avg_width") if isinstance(val_sec, dict) else None
-        test_cov = test_sec.get("coverage") if isinstance(test_sec, dict) else None
-        test_w = test_sec.get("avg_width") if isinstance(test_sec, dict) else None
-
-        return (
-            float(val_cov) if val_cov is not None else None,
-            float(val_w) if val_w is not None else None,
-            float(test_cov) if test_cov is not None else None,
-            float(test_w) if test_w is not None else None,
-        )
-
-    val_default_cov: List[float] = []
-    val_default_w: List[float] = []
-    test_default_cov: List[float] = []
-    test_default_w: List[float] = []
-
-    for r in run_rows:
-        cov_str = r.get("coverage")
-        if not cov_str:
-            continue
-        try:
-            cov_obj = json.loads(cov_str) if isinstance(cov_str, str) else cov_str
-        except Exception:
-            continue
-        v_cov, v_w, t_cov, t_w = _extract_default_cov_width(cov_obj)
-        if v_cov is not None:
-            val_default_cov.append(v_cov)
-        if v_w is not None:
-            val_default_w.append(v_w)
-        if t_cov is not None:
-            test_default_cov.append(t_cov)
-        if t_w is not None:
-            test_default_w.append(t_w)
 
     summary: Dict[str, Any] = {
         "experiment": exp_name,
@@ -592,14 +497,10 @@ def main() -> None:
         "val": {
             "pinball_mean": _aggregate(val_pinball_mean),
             "crossing_rate": _aggregate(val_cross),
-            **({"default_coverage": _aggregate(val_default_cov)} if len(val_default_cov) > 0 else {}),
-            **({"default_avg_width": _aggregate(val_default_w)} if len(val_default_w) > 0 else {}),
         },
         "test": {
             "pinball_mean": _aggregate(test_pinball_mean),
             "crossing_rate": _aggregate(test_cross),
-            **({"default_coverage": _aggregate(test_default_cov)} if len(test_default_cov) > 0 else {}),
-            **({"default_avg_width": _aggregate(test_default_w)} if len(test_default_w) > 0 else {}),
         },
         "runs": run_rows,
     }
@@ -608,40 +509,23 @@ def main() -> None:
     by_candidate: Dict[str, Any] = {}
     for cand_name in sorted({r["candidate"] for r in run_rows}):
         rows = [r for r in run_rows if r["candidate"] == cand_name]
-        c_val_cov: List[float] = []
-        c_val_w: List[float] = []
-        c_test_cov: List[float] = []
-        c_test_w: List[float] = []
-        for rr in rows:
-            cov_str = rr.get("coverage")
-            if not cov_str:
-                continue
-            try:
-                cov_obj = json.loads(cov_str) if isinstance(cov_str, str) else cov_str
-            except Exception:
-                continue
-            v_cov, v_w, t_cov, t_w = _extract_default_cov_width(cov_obj)
-            if v_cov is not None:
-                c_val_cov.append(v_cov)
-            if v_w is not None:
-                c_val_w.append(v_w)
-            if t_cov is not None:
-                c_test_cov.append(t_cov)
-            if t_w is not None:
-                c_test_w.append(t_w)
         by_candidate[cand_name] = {
             "n_runs": len(rows),
             "val": {
-                "pinball_mean": _aggregate([float(r["val_pinball_mean"]) for r in rows if r["val_pinball_mean"] is not None]),
-                "crossing_rate": _aggregate([float(r["val_crossing_rate"]) for r in rows if r["val_crossing_rate"] is not None]),
-                **({"default_coverage": _aggregate(c_val_cov)} if len(c_val_cov) > 0 else {}),
-                **({"default_avg_width": _aggregate(c_val_w)} if len(c_val_w) > 0 else {}),
+                "pinball_mean": _aggregate(
+                    [float(r["val_pinball_mean"]) for r in rows if r["val_pinball_mean"] is not None]
+                ),
+                "crossing_rate": _aggregate(
+                    [float(r["val_crossing_rate"]) for r in rows if r["val_crossing_rate"] is not None]
+                ),
             },
             "test": {
-                "pinball_mean": _aggregate([float(r["test_pinball_mean"]) for r in rows if r["test_pinball_mean"] is not None]),
-                "crossing_rate": _aggregate([float(r["test_crossing_rate"]) for r in rows if r["test_crossing_rate"] is not None]),
-                **({"default_coverage": _aggregate(c_test_cov)} if len(c_test_cov) > 0 else {}),
-                **({"default_avg_width": _aggregate(c_test_w)} if len(c_test_w) > 0 else {}),
+                "pinball_mean": _aggregate(
+                    [float(r["test_pinball_mean"]) for r in rows if r["test_pinball_mean"] is not None]
+                ),
+                "crossing_rate": _aggregate(
+                    [float(r["test_crossing_rate"]) for r in rows if r["test_crossing_rate"] is not None]
+                ),
             },
         }
 
@@ -653,12 +537,14 @@ def main() -> None:
     logger.info(f"Saved summary to: {exp_root / 'summary.json'}")
     logger.info(f"Saved per-run table to: {exp_root / 'runs.csv'}")
 
-    logger.info(
-        f"VAL pinball_mean mean±std: {summary['val']['pinball_mean']['mean']:.6f} ± {summary['val']['pinball_mean']['std']:.6f}"
-    )
-    logger.info(
-        f"TEST pinball_mean mean±std: {summary['test']['pinball_mean']['mean']:.6f} ± {summary['test']['pinball_mean']['std']:.6f}"
-    )
+    if not np.isnan(summary["val"]["pinball_mean"]["mean"]):
+        logger.info(
+            f"VAL pinball_mean mean±std: {summary['val']['pinball_mean']['mean']:.6f} ± {summary['val']['pinball_mean']['std']:.6f}"
+        )
+    if not np.isnan(summary["test"]["pinball_mean"]["mean"]):
+        logger.info(
+            f"TEST pinball_mean mean±std: {summary['test']['pinball_mean']['mean']:.6f} ± {summary['test']['pinball_mean']['std']:.6f}"
+        )
 
 
 if __name__ == "__main__":

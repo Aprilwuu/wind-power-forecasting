@@ -1,36 +1,35 @@
-# macOS system
+# macOS
 .DS_Store
 
-# Python
-venv/
+# VSCode
+.vscode/
+
+# Python cache
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+.env
 
 # Jupyter
 .ipynb_checkpoints/
 
-# Data (don't track data!)
-data/raw/
+# Project outputs / artifacts
+data/
+reports/
+logs/
+*.log
+*.out
+
+# Data files (if you ever keep small samples, delete these lines)
 *.csv
 *.xlsx
 *.parquet
 *.pkl
 *.npz
 
-# Logs / cache / outputs
-logs/
-*.log
-*.out
-
-# Backup files
+# Backup/temp
 *.bak
 *.tmp
-
-# VSCode
-.vscode/.DS_Store
-
-# outputs
-reports/experiments/
-data/
