@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Union
 
 import numpy as np
+import pandas as pd
 
 from src.data.load import load_raw_data
 from src.data.make_dataset import make_dataset
@@ -32,6 +33,34 @@ def _ensure_dir(p: str | Path) -> Path:
     pp = Path(p)
     pp.mkdir(parents=True, exist_ok=True)
     return pp
+
+def _save_preds(out_dir: Path, split_name: str, y_true: np.ndarray, qs: list[float], q_pred: np.ndarray) -> dict:
+    out_dir = _ensure_dir(out_dir)
+    y = np.asarray(y_true, dtype=float).reshape(-1)
+    q_pred = np.asarray(q_pred, dtype=float)
+
+    # map quantiles to standard columns if present
+    qmap = {float(q): q_pred[:, i] for i, q in enumerate(qs)}
+    payload = {"y_true": y}
+    if 0.05 in qmap: payload["q05"] = qmap[0.05]
+    if 0.5 in qmap:  payload["q50"] = qmap[0.5]
+    if 0.95 in qmap: payload["q95"] = qmap[0.95]
+
+    # clip to [0,1] to match your TCN postprocess convention
+    for k in ["q05", "q50", "q95"]:
+        if k in payload:
+            payload[k] = np.clip(payload[k], 0.0, 1.0)
+
+    # save csv
+    df = pd.DataFrame(payload)
+    csv_path = out_dir / f"preds_{split_name}_lgbm_qr.csv"
+    df.to_csv(csv_path, index=False)
+
+    # save npz (same keys, column vectors)
+    npz_path = out_dir / f"preds_{split_name}_lgbm_qr.npz"
+    np.savez_compressed(npz_path, **{k: np.asarray(v, dtype=np.float32).reshape(-1, 1) for k, v in payload.items()})
+
+    return {"csv": str(csv_path), "npz": str(npz_path), "keys": list(payload.keys())}
 
 
 @dataclass
@@ -257,7 +286,7 @@ def run_pipeline_quantile(
                 "avg_width": float(np.mean(hi_test - lo_test)),
             },
         }
-
+    
     metrics: Dict[str, Any] = {
         "track": "track1_temporal_quantile",
         "split": {"train_cut": train_cut, "val_cut": val_cut},
@@ -282,6 +311,12 @@ def run_pipeline_quantile(
         **({"coverage": coverage} if coverage else {}),
         "n_rows": {"train": int(len(df_train)), "val": int(len(df_val)), "test": int(len(df_test))},
     }
+    pred_files = {
+    "val": _save_preds(out_dir_p, "val", y_val, qs, q_pred_val),
+    "test": _save_preds(out_dir_p, "test", y_test, qs, q_pred_test),
+    }
+    metrics["pred_files"] = pred_files
+    
 
     metrics_path = out_dir_p / "metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
@@ -489,6 +524,11 @@ def run_pipeline_quantile_lofo(
         },
         **({"coverage": coverage} if coverage else {}),
     }
+    pred_files = {
+    "inner_val": _save_preds(out_dir_p, "inner_val", y_val, qs, q_pred_val),
+    "outer_test": _save_preds(out_dir_p, "outer_test", y_test, qs, q_pred_test),
+    }
+    metrics["pred_files"] = pred_files
 
     metrics_path = out_dir_p / "metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")

@@ -1,24 +1,12 @@
-# Base config (no tuning). Kept simple for quick runs.
-
-# ----------------------------
-# Backward-compatible flat keys
-# ----------------------------
-combined_data_path: "../data/processed/gefcom_wind_all_zones.csv"
-processed_output: "data/featured"
-target: "target"
-
-# ----------------------------
-# Structured sections (used by runners)
-# ----------------------------
 data:
-  combined_data_path: "../data/processed/gefcom_wind_all_zones.csv"
+  combined_data_path: "data/processed/gefcom_wind_all_zones.csv"
   target_col: "target"
   zone_col: "zone_id"
   time_col: "datetime"
 
 output:
   pipeline_root: "data/featured"
-  experiment_name: "lgbm_base_track1"
+  experiment_name: "lgbm_base_track1_lb168"
 
 split:
   type: "temporal"
@@ -26,11 +14,20 @@ split:
   val_cut: "2013-10-01"
 
 features:
-  lags: [1, 2, 3, 6, 12, 24]
-  rolling_windows: [6, 24]
+  keep_zone: true
+  lags: [1,2,3,6,12,24,48,72,96,120,144,168]
+  rolling_windows: [6,24,72,168]
 
 model:
-  base_params: {}
+  base_params:
+    n_estimators: 2000
+    learning_rate: 0.05
+    num_leaves: 63
+    min_data_in_leaf: 50
+    feature_fraction: 0.9
+    bagging_fraction: 0.9
+    bagging_freq: 1
+    verbose: -1
   candidates:
     - name: baseline
       overrides: {}
