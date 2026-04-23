@@ -1,9 +1,18 @@
+# src/features/build_features.py
 """
-Feature building utilities for wind forecasting (GEFCom-style).
-- Base features: time encodings, wind physics (U/V -> ws/wd/veer), zone features
-- ML features: lag/rolling stats for tree models (LightGBM/XGB/RF)
-- Seq features: windowing tensors + masks for deep models (TCN/Transformer)
+Feature engineering module for wind power forecasting.
 
+This module provides:
+    - Base features: time encodings and wind physics features
+    - ML features: lag and rolling statistics for tree-based models
+    - Sequence features: windowed tensors for deep models (TCN / Transformer)
+
+Used in:
+    - LightGBM (tabular features)
+    - TCN / Transformer (sequence features)
+
+Note:
+    All features are constructed using past information only to avoid data leakage.
 """
 
 from __future__ import annotations

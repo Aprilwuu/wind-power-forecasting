@@ -1,7 +1,20 @@
-# src/pipelines/utils_data.py
 from __future__ import annotations
 
-import json
+"""
+Data loading and preprocessing utilities for sequence forecasting.
+
+This module:
+  - loads and cleans raw data
+  - performs Track 1 / Track 2 splits
+  - builds sequence features
+  - constructs PyTorch DataLoaders
+
+Used by:
+  - TCN pipeline
+  - Transformer pipeline
+  - Beta Transformer pipeline
+"""
+
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,11 +31,12 @@ from src.features.build_features import make_seq_features
 
 
 # -----------------------------
-# Reproducibility (match TCN)
+# Reproducibility
 # -----------------------------
 def set_seed(seed: int | None, deterministic: bool = False) -> None:
     if seed is None:
         return
+
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -35,7 +49,6 @@ def set_seed(seed: int | None, deterministic: bool = False) -> None:
         torch.backends.cudnn.deterministic = False
         torch.backends.cudnn.benchmark = True
 
-    
 
 def device_from_str(device: Optional[str]) -> torch.device:
     if device is None:
@@ -50,14 +63,15 @@ def to_2d_y(y: np.ndarray) -> np.ndarray:
 
 
 # -----------------------------
-# Dataset aligned with TCN
+# Dataset
 # -----------------------------
 class SeqDataset(Dataset):
     """
     Returns:
-      if zone is None: (X, y)
-      else: (X, y, zone_idx)
+      - (X, y) if zone is None
+      - (X, y, zone_idx) otherwise
     """
+
     def __init__(self, X: np.ndarray, y: np.ndarray, zone: Optional[np.ndarray] = None):
         self.X = torch.from_numpy(X).float()
         self.y = torch.from_numpy(y).float()
@@ -73,7 +87,7 @@ class SeqDataset(Dataset):
 
 
 # -----------------------------
-# Zone mapping (match TCN)
+# Zone mapping
 # -----------------------------
 def build_zone_mapping_from_train(df_train, zone_col: str) -> Dict[Any, int]:
     zones = sorted(df_train[zone_col].unique().tolist())
@@ -89,7 +103,7 @@ def apply_zone_mapping(df, zone_col: str, mapping: Optional[Dict[Any, int]]):
 
 
 # -----------------------------
-# Sequence tensor builder (match TCN)
+# Sequence tensor helper
 # -----------------------------
 def _augment_with_mask(
     seq: Dict[str, np.ndarray],
@@ -97,25 +111,32 @@ def _augment_with_mask(
     add_missing_mask: bool,
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
-    Exactly the same as the helper inside your tcn_pipeline:
-      - X = seq["X"]
-      - y -> always [N, H] (use to_2d_y)
-      - if add_missing_mask and mask_missing exists: concatenate last dim
+    Convert sequence feature dict to model-ready arrays.
+
+    - X = seq["X"]
+    - y is always returned as [N, H]
+    - if add_missing_mask and mask_missing exists, concatenate it to X
     """
     X = seq["X"]  # [N, L, D]
     y = to_2d_y(seq["y"])  # [N, H]
     z = seq.get("zone", None)
 
     if add_missing_mask and ("mask_missing" in seq):
-        m = seq["mask_missing"]  # [N, L, 1] in your make_seq_features
+        m = seq["mask_missing"]  # [N, L, 1]
         X = np.concatenate([X, m.astype(np.float32)], axis=-1)
 
     zone = z.astype(np.int64) if z is not None else None
     return X.astype(np.float32), y.astype(np.float32), zone
 
 
+def _ensure_float32(x: np.ndarray) -> np.ndarray:
+    if x.dtype != np.float32:
+        x = x.astype(np.float32, copy=False)
+    return x
+
+
 # -----------------------------
-# Public: build loaders aligned with TCN
+# Public artifacts
 # -----------------------------
 @dataclass
 class DataArtifacts:
@@ -128,51 +149,9 @@ class DataArtifacts:
     meta: Dict[str, Any]
 
 
-def _load_latents(
-    ckg_dir: Union[str, Path],
-    *,
-    split: str,
-) -> np.ndarray:
-    """
-    Load cached latent sequences for a split.
-    Expected filenames:
-      - latents_train.npy
-      - latents_val.npy
-      - latents_test.npy
-    """
-    ckg_dir = Path(ckg_dir)
-    p = ckg_dir / f"latents_{split}.npy"
-    if not p.exists():
-        raise FileNotFoundError(f"Missing latent cache file: {p}")
-    arr = np.load(p)
-    if not isinstance(arr, np.ndarray):
-        raise TypeError(f"Latents must be a numpy array, got {type(arr)} from {p}")
-    return arr
-
-
-def _ensure_float32(x: np.ndarray) -> np.ndarray:
-    if x.dtype != np.float32:
-        x = x.astype(np.float32, copy=False)
-    return x
-
-
-def _check_latents_shape(
-    lat: np.ndarray,
-    *,
-    n_expected: int,
-    lookback: int,
-    name: str,
-) -> None:
-    if lat.ndim != 3:
-        raise ValueError(f"{name} must be rank-3 [N,L,D], got shape={lat.shape}")
-    if lat.shape[0] != n_expected:
-        raise ValueError(f"{name} N mismatch: expected {n_expected}, got {lat.shape[0]}")
-    if lat.shape[1] != lookback:
-        raise ValueError(f"{name} lookback mismatch: expected L={lookback}, got {lat.shape[1]}")
-    if lat.shape[2] <= 0:
-        raise ValueError(f"{name} latent_dim must be > 0, got {lat.shape[2]}")
-
-
+# -----------------------------
+# Public: build loaders
+# -----------------------------
 def build_seq_dataloaders(
     *,
     data_path: Union[str, Path],
@@ -205,21 +184,17 @@ def build_seq_dataloaders(
     batch_size: int = 256,
     num_workers: int = 0,
     pin_memory: bool = True,
-
-    # -------- NEW (optional) cache params --------
-    use_vae: bool = False,
-    vae_mode: str = "e2e",  # "e2e" or "cache"
-    vae_ckg_dir: Optional[Union[str, Path]] = None,
-) -> "DataArtifacts":
+) -> DataArtifacts:
     """
-    Builds loaders using the SAME logic as your original TCN pipeline:
-      load_raw_data -> make_dataset -> split -> make_seq_features -> augment mask -> SeqDataset -> DataLoader
+    Build DataLoaders using the unified sequence data pipeline.
 
-    Optional VAE cache mode:
-      If use_vae=True and vae_mode="cache":
-        - Load latents_{train,val,test}.npy from vae_ckg_dir
-        - Replace Xtr/Xva/Xte with these latents (shape [N, lookback, latent_dim])
-        - input_dim becomes latent_dim
+    Steps:
+      1. load_raw_data
+      2. make_dataset
+      3. split by protocol
+      4. make_seq_features
+      5. add mask channel if needed
+      6. build SeqDataset + DataLoader
     """
 
     # ----------------------------
@@ -236,11 +211,15 @@ def build_seq_dataloaders(
     if protocol == "track1_temporal":
         if train_cut is None or val_cut is None:
             raise ValueError("track1_temporal requires train_cut and val_cut.")
+
         df_train, df_val, df_test = train_valid_split(
-            df, time_col=time_col, zone_col=zone_col, train_cut=train_cut, val_cut=val_cut
+            df,
+            time_col=time_col,
+            zone_col=zone_col,
+            train_cut=train_cut,
+            val_cut=val_cut,
         )
 
-        # keep_zone mapping is allowed in Track1
         if keep_zone:
             zone_mapping = build_zone_mapping_from_train(df_train, zone_col=zone_col)
             df_train = apply_zone_mapping(df_train, zone_col, zone_mapping)
@@ -250,6 +229,7 @@ def build_seq_dataloaders(
     elif protocol == "track2_lofo_time_val":
         if held_out_group is None or val_days is None:
             raise ValueError("track2_lofo_time_val requires held_out_group and val_days.")
+
         df_train, df_val, df_test = lofo_time_val_split(
             df,
             held_out_group=held_out_group,
@@ -259,7 +239,7 @@ def build_seq_dataloaders(
             min_train=int(min_train),
         )
 
-        # IMPORTANT: unknown-zone generalization -> disable keep_zone for LOFO
+        # For LOFO generalization, disable zone embedding
         keep_zone = False
         zone_mapping = None
 
@@ -290,40 +270,12 @@ def build_seq_dataloaders(
     Xva, yva, zva = _augment_with_mask(seq_val, add_missing_mask=bool(add_missing_mask))
     Xte, yte, zte = _augment_with_mask(seq_test, add_missing_mask=bool(add_missing_mask))
 
-    # Ensure float32 for torch conversion
     Xtr = _ensure_float32(Xtr)
     Xva = _ensure_float32(Xva)
     Xte = _ensure_float32(Xte)
 
     # ----------------------------
-    # 4) Optional: replace X with cached latents
-    # ----------------------------
-    if bool(use_vae) and str(vae_mode).lower().strip() == "cache":
-        if vae_ckg_dir is None:
-            raise ValueError("vae_mode='cache' requires vae_ckg_dir pointing to the cache folder.")
-
-        lat_tr = _load_latents(vae_ckg_dir, split="train")
-        lat_va = _load_latents(vae_ckg_dir, split="val")
-        lat_te = _load_latents(vae_ckg_dir, split="test")
-
-        # Sanity checks to guarantee alignment
-        _check_latents_shape(lat_tr, n_expected=int(ytr.shape[0]), lookback=int(lookback), name="latents_train")
-        _check_latents_shape(lat_va, n_expected=int(yva.shape[0]), lookback=int(lookback), name="latents_val")
-        _check_latents_shape(lat_te, n_expected=int(yte.shape[0]), lookback=int(lookback), name="latents_test")
-
-        # Force float32 (torch-friendly)
-        lat_tr = _ensure_float32(lat_tr)
-        lat_va = _ensure_float32(lat_va)
-        lat_te = _ensure_float32(lat_te)
-
-        # Replace X*
-        Xtr, Xva, Xte = lat_tr, lat_va, lat_te
-
-        # NOTE: z arrays remain unchanged (if Track1 keep_zone=True, model may still use z)
-        # For Track2 keep_zone is forced False above.
-
-    # ----------------------------
-    # 5) Build datasets + loaders
+    # 4) Build datasets + loaders
     # ----------------------------
     train_ds = SeqDataset(Xtr, ytr, ztr if keep_zone else None)
     val_ds = SeqDataset(Xva, yva, zva if keep_zone else None)
@@ -355,15 +307,23 @@ def build_seq_dataloaders(
     )
 
     input_dim = int(Xtr.shape[-1])
-    output_dim = int(ytr.shape[-1])  # y is always [N, H]
+    output_dim = int(ytr.shape[-1])
 
     # ----------------------------
-    # 6) Meta
+    # 5) Meta
     # ----------------------------
     meta = {
         "protocol": protocol,
-        "n_rows": {"train": int(len(df_train)), "val": int(len(df_val)), "test": int(len(df_test))},
-        "n_seq_samples": {"train": int(len(train_ds)), "val": int(len(val_ds)), "test": int(len(test_ds))},
+        "n_rows": {
+            "train": int(len(df_train)),
+            "val": int(len(df_val)),
+            "test": int(len(df_test)),
+        },
+        "n_seq_samples": {
+            "train": int(len(train_ds)),
+            "val": int(len(val_ds)),
+            "test": int(len(test_ds)),
+        },
         "seq": {
             "lookback": int(lookback),
             "horizon": int(horizon),
@@ -371,15 +331,13 @@ def build_seq_dataloaders(
             "include_target_as_input": bool(include_target_as_input),
             "add_missing_mask": bool(add_missing_mask),
         },
-        "cols": {"target_col": target_col, "zone_col": zone_col, "time_col": time_col},
+        "cols": {
+            "target_col": target_col,
+            "zone_col": zone_col,
+            "time_col": time_col,
+        },
         "keep_zone": bool(keep_zone),
         "zone_mapping": zone_mapping,
-        "vae": {
-            "use_vae": bool(use_vae),
-            "vae_mode": str(vae_mode).lower().strip(),
-            "vae_ckg_dir": str(vae_ckg_dir) if vae_ckg_dir is not None else None,
-            "input_dim_raw_or_latent": int(input_dim),
-        },
     }
 
     return DataArtifacts(

@@ -10,13 +10,11 @@ from torch import nn
 from src.pipelines.forecast_base import ForecastBasePipeline
 from src.pipelines.utils_data import DataArtifacts
 from src.models.probabilistic.beta.beta_transformer import BetaTimeSeriesTransformer
-from src.models.representation.vae import SequenceVAE
-from src.models.representation.vae_transformer_wrappers import VAETransformerBetaForecast
 
 
 def _scale_to_unit(y: torch.Tensor, y_min: float, y_max: float, eps: float = 1e-4) -> torch.Tensor:
     """Scale y from [y_min, y_max] to (0, 1) and clamp for numerical stability."""
-    denom = (y_max - y_min)
+    denom = y_max - y_min
     if denom <= 0:
         raise ValueError(f"Invalid y_min/y_max: y_min={y_min}, y_max={y_max}")
     y01 = (y - y_min) / denom
@@ -53,6 +51,7 @@ class BetaTransformerWithZoneEmbedding(nn.Module):
       x: [B, L, F]
       z: [B]
     """
+
     def __init__(self, base: nn.Module, n_zones_with_unk: int, emb_dim: int):
         super().__init__()
         self.base = base
@@ -60,9 +59,9 @@ class BetaTransformerWithZoneEmbedding(nn.Module):
 
     def forward(self, x: torch.Tensor, z: torch.Tensor):
         z = z.long()
-        ze = self.emb(z)                                  # [B, E]
-        ze = ze.unsqueeze(1).expand(-1, x.size(1), -1)   # [B, L, E]
-        x_aug = torch.cat([x, ze], dim=-1)               # [B, L, F+E]
+        ze = self.emb(z)                                # [B, E]
+        ze = ze.unsqueeze(1).expand(-1, x.size(1), -1) # [B, L, E]
+        x_aug = torch.cat([x, ze], dim=-1)             # [B, L, F+E]
         return self.base(x_aug)
 
 
@@ -74,22 +73,18 @@ class TransformerBetaPipeline(ForecastBasePipeline):
       - point prediction uses Beta mean mapped back to original scale
       - interval uses SciPy beta.ppf
       - supports keep_zone embedding concat
-      - supports VAE in two modes:
-          (1) vae_mode="e2e": end-to-end VAE encoder runs inside the model
-          (2) vae_mode="cache": dataloader provides precomputed latent sequences
     """
 
     def build_model(self, input_dim: int, output_dim: int, data_art: DataArtifacts) -> nn.Module:
         cfg = self.cfg
 
         if int(output_dim) != 1:
-            raise ValueError(f"Beta transformer currently supports horizon=1 only, got output_dim={output_dim}.")
+            raise ValueError(
+                f"Beta transformer currently supports horizon=1 only, got output_dim={output_dim}."
+            )
 
         keep_zone = bool(data_art.meta.get("keep_zone", False))
         zone_emb_dim = int(cfg.get("zone_emb_dim", 8))
-
-        if bool(cfg.get("keep_zone", keep_zone)) and not keep_zone:
-            pass
 
         d_model = int(cfg.get("d_model", 64))
         nhead = int(cfg.get("nhead", 4))
@@ -103,106 +98,6 @@ class TransformerBetaPipeline(ForecastBasePipeline):
         num_components = int(cfg.get("num_components", 1))
         if num_components != 1:
             raise ValueError("TransformerBetaPipeline currently supports num_components=1 only.")
-
-        use_vae = bool(cfg.get("use_vae", False))
-
-        def _load_ckpt(model: nn.Module, ckpt_path: str) -> None:
-            ckpt = torch.load(ckpt_path, map_location="cpu")
-            state = ckpt.get("state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
-            if isinstance(state, dict) and any(k.startswith("module.") for k in state.keys()):
-                state = {k.replace("module.", "", 1): v for k, v in state.items()}
-            model.load_state_dict(state, strict=False)
-
-        if use_vae:
-            vae_mode = str(cfg.get("vae_mode", "e2e")).lower().strip()
-            if vae_mode not in ("e2e", "cache"):
-                raise ValueError("cfg['vae_mode'] must be one of: 'e2e', 'cache'.")
-
-            if vae_mode == "cache":
-                if int(input_dim) <= 0:
-                    raise ValueError(
-                        "vae_mode='cache' expects input_dim (=latent_dim) > 0. "
-                        "This usually means your latent cache was not loaded correctly. "
-                        "Verify your cache loading replaces Xtr/Xva/Xte and updates DataArtifacts.input_dim."
-                    )
-
-                in_dim = int(input_dim + (zone_emb_dim if keep_zone else 0))
-
-                beta_core = BetaTimeSeriesTransformer(
-                    input_dim=in_dim,
-                    d_model=d_model,
-                    nhead=nhead,
-                    num_layers=num_layers,
-                    dim_feedforward=dim_ff,
-                    dropout=dropout,
-                    num_components=1,
-                    eps=eps,
-                    kappa_max=kappa_max,
-                )
-
-                if not keep_zone:
-                    return beta_core
-
-                zone_mapping = data_art.zone_mapping
-                if zone_mapping is None:
-                    raise ValueError("keep_zone=True but data_art.zone_mapping is None.")
-                n_train_zones = int(len(zone_mapping))
-                return BetaTransformerWithZoneEmbedding(
-                    base=beta_core, n_zones_with_unk=n_train_zones + 1, emb_dim=zone_emb_dim
-                )
-
-            vae_cfg = cfg.get("vae", {})
-            if not isinstance(vae_cfg, dict):
-                raise ValueError("cfg['vae'] must be a dict of SequenceVAE init kwargs.")
-            vae = SequenceVAE(**vae_cfg)
-
-            vae_ckpt = cfg.get("vae_ckpt_path", None)
-            if vae_ckpt:
-                _load_ckpt(vae, vae_ckpt)
-
-            latent_dim = None
-            for attr in ("latent_dim", "z_dim", "dim_latent"):
-                if hasattr(vae, attr):
-                    latent_dim = int(getattr(vae, attr))
-                    break
-            if latent_dim is None:
-                latent_dim = int(cfg.get("vae_latent_dim", 0))
-            if latent_dim <= 0:
-                raise ValueError("Could not infer VAE latent dim. Set cfg['vae_latent_dim'].")
-
-            in_dim = int(latent_dim + (zone_emb_dim if keep_zone else 0))
-
-            beta_core = BetaTimeSeriesTransformer(
-                input_dim=in_dim,
-                d_model=d_model,
-                nhead=nhead,
-                num_layers=num_layers,
-                dim_feedforward=dim_ff,
-                dropout=dropout,
-                num_components=1,
-                eps=eps,
-                kappa_max=kappa_max,
-            )
-
-            if keep_zone:
-                zone_mapping = data_art.zone_mapping
-                if zone_mapping is None:
-                    raise ValueError("keep_zone=True but data_art.zone_mapping is None.")
-                n_train_zones = int(len(zone_mapping))
-                beta_model = BetaTransformerWithZoneEmbedding(
-                    base=beta_core, n_zones_with_unk=n_train_zones + 1, emb_dim=zone_emb_dim
-                )
-            else:
-                beta_model = beta_core
-
-            return VAETransformerBetaForecast(
-                vae=vae,
-                beta_transformer=beta_model,
-                freeze_vae=bool(cfg.get("freeze_vae", True)),
-                use_sample_z=bool(cfg.get("use_sample_z", False)),
-                detach_z_when_frozen=True,
-                return_aux=False,
-            )
 
         in_dim = int(input_dim + (zone_emb_dim if keep_zone else 0))
 
@@ -224,9 +119,12 @@ class TransformerBetaPipeline(ForecastBasePipeline):
         zone_mapping = data_art.zone_mapping
         if zone_mapping is None:
             raise ValueError("keep_zone=True but data_art.zone_mapping is None.")
+
         n_train_zones = int(len(zone_mapping))
         return BetaTransformerWithZoneEmbedding(
-            base=beta_core, n_zones_with_unk=n_train_zones + 1, emb_dim=zone_emb_dim
+            base=beta_core,
+            n_zones_with_unk=n_train_zones + 1,
+            emb_dim=zone_emb_dim,
         )
 
     def model_forward(self, model: nn.Module, batch):
@@ -253,6 +151,7 @@ class TransformerBetaPipeline(ForecastBasePipeline):
         """Beta NLL on y scaled to (0,1)."""
         alpha, beta = pred
         y = y.to(self.device)
+
         if y.dim() == 1:
             y = y.unsqueeze(-1)
 
@@ -327,8 +226,7 @@ class TransformerBetaPipeline(ForecastBasePipeline):
             from scipy.stats import beta as sp_beta
         except Exception as e:
             raise ImportError(
-                "SciPy is required for Beta intervals when torch Beta.cdf/icdf is unavailable. "
-                "Install with: pip install -U scipy"
+                "SciPy is required for Beta intervals. Install with: pip install -U scipy"
             ) from e
 
         a_np = alpha_.detach().cpu().numpy().astype(np.float64, copy=False)

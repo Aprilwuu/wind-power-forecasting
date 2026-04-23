@@ -1,10 +1,12 @@
 import pandas as pd
 
 def load_data(path: str) -> pd.DataFrame:
-    try:
-        df = pd.read_csv(path, parse_dates=["TIMESTAMP"])
-        return df
-    except Exception:
-        #in case of no "TIMESTAMP" column, just read normally
-        return pd.read_csv
+    """
+    Load CSV data. If TIMESTAMP column exists, parse it as datetime.
+    """
+    df = pd.read_csv(path)
 
+    if "TIMESTAMP" in df.columns:
+        df["TIMESTAMP"] = pd.to_datetime(df["TIMESTAMP"], errors="coerce")
+
+    return df

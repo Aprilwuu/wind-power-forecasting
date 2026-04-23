@@ -11,14 +11,14 @@ import pandas as pd
 import torch
 from torch import nn
 
-from src.models.tcn import TCN
+from src.models.backbones.tcn import TCN
 from src.models.probabilistic.mc_dropout.mc_dropout import mc_dropout_predict
 from src.pipelines.forecast_base import ForecastBasePipeline
 from src.pipelines.utils_data import DataArtifacts
 
 
 # -----------------------------
-# Helpers (same behavior as your old tcn_pipeline.py)
+# Helpers (same behavior as old tcn_pipeline.py)
 # -----------------------------
 def _to_2d_y(y: np.ndarray) -> np.ndarray:
     if y.ndim == 1:
