@@ -1,0 +1,53 @@
+# configs/tcn_track1_fast.yaml
+
+protocol: track1_temporal
+data:
+  path: data/processed/gefcom_wind_all_zones.csv   # <-- 改成你的真实路径
+
+cols:
+  target_col: target
+  zone_col: zone_id
+  time_col: datetime
+
+# Track1 split: 必须提供
+split:
+  type: temporal
+  train_cut: "2013-07-01 00:00:00"   # <-- 按你数据的时间范围调整
+  val_cut:   "2013-10-01 00:00:00"   # <-- 按你数据的时间范围调整
+
+seq:
+  lookback: 168
+  horizon: 1
+  feature_cols: null
+  include_target_as_input: true
+  add_missing_mask: true
+
+train:
+  device: cuda
+  batch_size: 256
+  max_epochs: 20
+  patience: 5
+  lr: 0.001
+  weight_decay: 0.0
+  grad_clip: 1.0
+
+  # 关键：减少验证频率（你之前在 ForecastBasePipeline 里加了这个）
+  val_every: 5
+
+model:
+  tcn:
+    channels: [32, 64, 64]
+    kernel_size: 3
+    dropout: 0.2
+  train_loss:
+    name: mse
+    huber_delta: 1.0
+
+prob:
+  use_mc_dropout: false
+  mc_runs: 50
+  mc_quantiles: [0.05, 0.5, 0.95]
+  target_picp: 0.9
+
+keep_zone: false
+zone_emb_dim: 8

@@ -1,0 +1,78 @@
+# ============================================================
+# Track 1 — Deterministic LightGBM (Temporal cut split)
+# Seeds: 42 / 43 / 44
+# ============================================================
+
+# ----------------------------
+# Backward-compatible flat keys
+# ----------------------------
+combined_data_path: "../data/processed/gefcom_wind_all_zones.csv"
+processed_output: "data/featured"
+target: "target"
+
+# ----------------------------
+# Structured sections (used by runners)
+# ----------------------------
+data:
+  combined_data_path: "../data/processed/gefcom_wind_all_zones.csv"
+  target_col: "target"
+  zone_col: "zone_id"
+  time_col: "datetime"
+
+output:
+  pipeline_root: "data/featured"
+  experiment_name: "lgbm_track1_det_lb168"
+
+# Track1 temporal split
+split:
+  type: "temporal"
+  train_cut: "2013-07-01"
+  val_cut: "2013-10-01"
+
+features:
+  # match quantile config (lb168)
+  lags: [1, 2, 3, 6, 12, 24, 48, 72, 96, 120, 144, 168]
+  rolling_windows: [6, 24, 72, 168]
+  keep_zone: true
+
+# ------------------------------------------------------------
+# multi-seed control 
+# ------------------------------------------------------------
+seeds: [42, 43, 44]
+
+# deterministic model (point forecast)
+model:
+  name: "lightgbm"
+
+  base_params:
+    objective: "regression"
+    metric: ["rmse", "mae"]
+
+    # match quantile baseline hyperparams
+    n_estimators: 2000
+    learning_rate: 0.05
+    num_leaves: 63
+    min_data_in_leaf: 50
+
+    feature_fraction: 0.9
+    bagging_fraction: 0.9
+    bagging_freq: 1
+
+    
+    lambda_l2: 1.0
+
+    # match quantile verbosity style
+    verbose: -1
+
+
+  candidates:
+    - name: baseline
+      overrides: {}
+
+training:
+  early_stopping_rounds: 200
+  verbose_eval: 200
+  eval_split: "val"
+
+metrics:
+  primary: "rmse"

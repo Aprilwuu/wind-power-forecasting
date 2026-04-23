@@ -68,9 +68,10 @@ def create_lgbm_model(params: dict | None = None, seed: int | None = None) -> LG
         base_params.update(params)
 
     if seed is not None:
-        base_params.setdefault("seed", seed)
-        base_params.setdefault("data_random_seed", seed)
-        base_params.setdefault("feature_fraction_seed", seed)
-        base_params.setdefault("bagging_seed", seed)
+        base_params["seed"] = seed
+        base_params["data_random_seed"] = seed
+        base_params["feature_fraction_seed"] = seed
+        base_params["bagging_seed"] = seed
+
 
     return LGBMModel(params=base_params, num_boost_round=500)

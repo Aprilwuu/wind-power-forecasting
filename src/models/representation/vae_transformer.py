@@ -1,61 +1,89 @@
-from src.models.representation.vae import SequenceVAE
-from src.models.deterministic.transformer import TimeSeriesTransformer
+from __future__ import annotations
+
+from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 
-class VAETransformerForecast(nn.Module):
-    """Wrap a VAE encoder and a TimeSeriesTransformer for latent-space forecasting.
-    
-    This module assumes that the VAE provides an 'encode(x)' method that returns (mu, logvar),
-    and optionally a 'reparameterize(mu, logvar)' method.
+from src.models.representation.vae import SequenceVAE
+from src.models.deterministic.transformer import TimeSeriesTransformer
 
-    The workflow is:
-        1) Take raw input x: [batch, seq_len, input_dim_raw]
-        2) Use VAE encoder to obtain latent sequence z: [ batch, seq_len, latent_dim]
-        3) Feed z into a TimeSeriesTransformer whose 'input_dim' matches latent_dim
+
+class VAETransformerForecast(nn.Module):
+    """
+    Wrapper: VAE encoder -> latent sequence -> Transformer forecast.
+
+    Assumptions:
+      - vae.encode(x, **kwargs) returns (mu, logvar), each [B, L, latent_dim] (or compatible)
+      - optionally vae.reparameterize(mu, logvar) exists
+      - transformer(z, **kwargs) accepts z [B, L, latent_dim]
     """
 
     def __init__(
         self,
-        vae: nn.Module,
+        vae: SequenceVAE,
         transformer: TimeSeriesTransformer,
         freeze_vae: bool = True,
         use_sample_z: bool = False,
+        detach_z_when_frozen: bool = True,
+        return_aux: bool = False,  # if True, return (out, {"mu":..., "logvar":...})
     ):
         super().__init__()
         self.vae = vae
         self.transformer = transformer
         self.freeze_vae = freeze_vae
         self.use_sample_z = use_sample_z
+        self.detach_z_when_frozen = detach_z_when_frozen
+        self.return_aux = return_aux
 
         if self.freeze_vae:
             for p in self.vae.parameters():
                 p.requires_grad = False
 
-    def foward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass using VAE encoder + Transformer.
-        
+    def forward(
+        self,
+        x: torch.Tensor,
+        *,
+        vae_kwargs: Optional[Dict[str, Any]] = None,
+        transformer_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+        """
         Args:
-            x: [batch, seq_len, input_dim_raw]
-            
+            x: [B, L, input_dim_raw]
+            vae_kwargs: extra kwargs for vae.encode(...)
+            transformer_kwargs: extra kwargs for transformer(...)
+
         Returns:
-            Model prediction from the underlying Transformer, e.g. [batch, output_dim].
-            """
-        
-        # Encode to latent sequence with VAE
+            out or (out, aux)
+        """
+        vae_kwargs = vae_kwargs or {}
+        transformer_kwargs = transformer_kwargs or {}
+
+        # If VAE is frozen, keep it in eval mode to avoid dropout/bn randomness
+        if self.freeze_vae:
+            self.vae.eval()
+
+        # Encode
         if self.freeze_vae:
             with torch.no_grad():
-                mu, logvar = self.vae.encode(x)
+                mu, logvar = self.vae.encode(x, **vae_kwargs)
         else:
-            mu, logvar = self.vae.encode(x)
+            mu, logvar = self.vae.encode(x, **vae_kwargs)
 
-        # Either use mean as deterministic embedding or sample z
+        # Choose latent representation
         if self.use_sample_z and hasattr(self.vae, "reparameterize"):
             z = self.vae.reparameterize(mu, logvar)
         else:
             z = mu
-        
-        # z: [batch, seq_len, latent_dim] -> Transformer expects [batch, seq_len, input_dim]
-        out = self.transformer(z)
+
+        if self.freeze_vae and self.detach_z_when_frozen:
+            z = z.detach()
+
+        # Forecast in latent space
+        out = self.transformer(z, **transformer_kwargs)
+
+        if self.return_aux:
+            aux = {"mu": mu, "logvar": logvar}
+            return out, aux
+
         return out

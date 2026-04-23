@@ -1,0 +1,47 @@
+
+paths:
+  featured_dir: data/featured
+  reports_dir: reports/experiments
+
+data:
+  path: data/processed/gefcom_wind_all_zones.csv
+
+split:
+  type: temporal
+  train_cut: "2013-07-01"
+  val_cut: "2013-10-01"
+  group_col: null
+
+seq:
+  lookback: 168
+  horizon: 1
+  feature_cols: null
+  include_target_as_input: true
+  add_missing_mask: true
+
+keep_zone: true
+zone_emb_dim: 8
+
+model:
+  tcn:
+    channels: [64, 64, 64]
+    kernel_size: 3
+    dropout: 0.2
+  train_loss:
+    name: huber
+    huber_delta: 1.0
+
+training:
+  batch_size: 256
+  max_epochs: 50
+  patience: 8
+  lr: 0.001
+  weight_decay: 0.0
+  grad_clip: 1.0
+  device: cuda
+
+# Deterministic: no MC dropout
+prob:
+  use_mc_dropout: false
+  mc_runs: 0
+  mc_quantiles: []

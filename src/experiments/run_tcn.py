@@ -8,6 +8,7 @@ import logging
 import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
+import time
 
 import numpy as np
 import yaml
@@ -444,6 +445,8 @@ def main() -> None:
                 logger.info(
                     f"Running Track1 temporal (TCN) | candidate={cand_name} | seed={seed} | out_dir={out_dir}"
                 )
+                
+                start_time = time.time()
 
                 result = run_pipeline_any(
                     data_path=str(data_path),
@@ -477,6 +480,11 @@ def main() -> None:
                     mc_runs=_mc_runs,
                     mc_quantiles=_mc_quantiles,
                 )
+
+                end_time = time.time()
+                train_minutes = (end_time - start_time) / 60
+
+                logger.info(f"Training time: {train_minutes:.2f} minutes")
 
                 conf = _run_conformal_if_needed(
                     out_dir=result.out_dir,
@@ -512,6 +520,7 @@ def main() -> None:
                     "target_picp": float(_target_picp),
                     "loss_name": _loss_name,
                     "huber_delta": float(_huber_delta),
+                    "train_minutes": train_minutes,
                     # conformal fields
                     **conf,
                 }

@@ -1,0 +1,92 @@
+pipeline: beta_transformer
+protocol: track1_temporal
+
+paths:
+  featured_dir: data/featured
+  reports_dir: reports/experiments
+
+data:
+  path: data/processed/gefcom_wind_all_zones.csv
+
+cols:
+  target_col: target
+  zone_col: zone_id
+  time_col: datetime
+
+split:
+  train_cut: "2013-07-01 00:00:00"
+  val_cut:   "2013-10-01 00:00:00"
+
+seq:
+  lookback: 168
+  horizon: 1
+  feature_cols: null
+  include_target_as_input: true
+  add_missing_mask: true
+
+
+keep_zone: true
+zone_emb_dim: 8
+
+# --------------------
+# Beta Transformer hparams
+# --------------------
+d_model: 64
+nhead: 4
+num_layers: 2
+dim_feedforward: 128
+dropout: 0.1
+num_components: 1
+
+# Beta parameter controls
+eps: 1e-4
+kappa_max: null
+
+# y already normalized to [0,1]
+y_min: 0.0
+y_max: 1.0
+
+# Interval (for your postprocess_interval + PICP/MPIW)
+compute_interval: true
+interval_coverage: 0.90
+q_iter: 60
+
+# --------------------
+# VAE cache (IMPORTANT: match run_vae.py output layout)
+# --------------------
+use_vae: true
+vae_mode: cache
+vae_ckg_dir: reports/vae/track1
+
+# Ignored in cache mode; keep for compatibility
+freeze_vae: true
+use_sample_z: false
+vae_ckpt_path: null
+vae_latent_dim: null
+vae: {}
+
+training:
+  batch_size: 256
+  max_epochs: 50
+  patience: 8
+  lr: 0.001
+  weight_decay: 0.0
+  grad_clip: 1.0
+  device: cuda
+  num_workers: 0
+  pin_memory: true
+  val_every: 1
+
+# keep for alignment (beta loss is handled in compute_loss anyway)
+model:
+  train_loss:
+    name: beta_nll
+    huber_delta: null
+
+train_loss_name: beta_nll
+huber_delta: 1.0
+
+prob:
+  use_mc_dropout: false
+  mc_runs: 0
+  mc_quantiles: []

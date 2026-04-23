@@ -1,0 +1,63 @@
+pipeline: transformer_qr
+protocol: track2_lofo_time_val
+
+paths:
+  featured_dir: data/featured
+  reports_dir: reports/experiments
+
+data:
+  path: data/processed/gefcom_wind_all_zones.csv
+
+split:
+  type: lofo_time_val
+  held_out_group: 1
+  val_days: 30
+  group_col: zone_id
+
+seq:
+  lookback: 168
+  horizon: 1
+  feature_cols: null
+  include_target_as_input: true
+  add_missing_mask: true
+
+keep_zone: false
+zone_emb_dim: 8
+
+d_model: 64
+nhead: 4
+num_layers: 1
+dim_feedforward: 128
+dropout: 0.1
+
+use_vae: false
+freeze_vae: true
+use_sample_z: false
+vae_ckpt_path: null
+vae_latent_dim: null
+vae: {}
+
+training:
+  batch_size: 256
+  max_epochs: 50
+  patience: 8
+  lr: 0.0003
+  weight_decay: 0.0
+  grad_clip: 1.0
+  device: cuda
+  num_workers: 2
+  pin_memory: true
+  val_every: 1
+
+model:
+  quantiles: [0.05, 0.5, 0.95]
+  train_loss:
+    name: pinball
+
+probabilistic:
+  quantiles: [0.05, 0.5, 0.95]
+
+prob:
+  use_mc_dropout: false
+  mc_runs: 0
+  mc_quantiles: []

@@ -1,0 +1,42 @@
+# configs/vae_track2_lofo.yaml
+pipeline: vae
+protocol: track2_lofo_time_val
+
+data:
+  path: data/processed/gefcom_wind_all_zones.csv
+
+split:
+  type: lofo
+  held_out_group: null     # runner will fill OR you pass --held_out_group
+  val_days: 30
+  min_train: 1000
+  group_col: zone_id
+
+seq:
+  lookback: 168
+  horizon: 1
+  feature_cols: null
+  include_target_as_input: true
+  add_missing_mask: true
+
+# Track2 will force keep_zone=false inside build_seq_dataloaders anyway
+keep_zone: false
+
+vae:
+  # IMPORTANT: input_dim will be auto-filled by run_vae.py if you omit it
+  hidden_dim: 64
+  latent_dim: 16
+
+# Optional: weight on KL term
+vae_beta_kl: 1.0
+
+training:
+  batch_size: 256
+  max_epochs: 30
+  patience: 6
+  lr: 0.001
+  weight_decay: 0.0
+  grad_clip: 1.0
+  device: cuda
+  num_workers: 0
+  pin_memory: true

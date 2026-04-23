@@ -1,0 +1,83 @@
+# ============================================================
+# Track 2 — Deterministic LightGBM (LOFO)
+#   - Point forecasting baseline for Track 2
+#   - LOFO outer split + inner time validation for early stopping
+#   - Hyperparams aligned with quantile baseline style
+# ============================================================
+
+experiment:
+  track: 2
+  name: "lgbm_track2_det_lb168"
+  tags: ["track2", "lofo", "deterministic", "lgbm", "lb168"]
+
+seeds: [42, 43, 44]
+
+data:
+  combined_data_path: "../data/processed/gefcom_wind_all_zones.csv"
+  zone_col: "zone_id"
+  time_col: "datetime"
+  target_col: "target"
+
+features:
+  # match lb168 style (same as your track1 quantile baseline)
+  lags: [1, 2, 3, 6, 12, 24, 48, 72, 96, 120, 144, 168]
+  rolling_windows: [6, 24, 72, 168]
+
+  # Track 2 protocol: do NOT expose zone identity
+  keep_zone: false
+
+  drop_cols: ["datetime"]
+
+split:
+  type: "lofo_time_val"
+  group_col: "zone_id"
+
+  time_col: "datetime"
+  val_days: 30
+
+  min_train: 1000
+
+model:
+  name: "lightgbm"
+
+  base_params:
+    objective: "regression"
+    metric: ["rmse", "mae"]
+
+    # align with quantile baseline hyperparams
+    n_estimators: 2000
+    learning_rate: 0.05
+    num_leaves: 63
+    min_data_in_leaf: 50
+
+    feature_fraction: 0.9
+    bagging_fraction: 0.9
+    bagging_freq: 1
+
+    lambda_l1: 0.0
+    lambda_l2: 1.0
+
+    # keep both keys in case runner expects one or the other
+    verbose: -1
+    verbosity: -1
+
+
+  candidates:
+    - name: "baseline"
+      overrides: {}
+
+training:
+  early_stopping_rounds: 200
+  verbose_eval: 200
+  eval_split: "inner_val"
+
+metrics:
+  primary: "rmse"
+
+output:
+  root_dir: "data/featured"
+  experiment_name: "lgbm_track2_det_lb168"
+
+  save_models: true
+  save_oof_predictions: true
+  save_fold_predictions: true

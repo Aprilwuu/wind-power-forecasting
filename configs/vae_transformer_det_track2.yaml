@@ -1,0 +1,98 @@
+# configs/transformer_det_track2_lofo_cache.yaml
+pipeline: transformer_det
+protocol: track2_lofo_time_val
+
+# --------------------
+# Paths (kept for alignment with other pipelines)
+# --------------------
+paths:
+  featured_dir: data/featured
+  reports_dir: reports/experiments
+
+# --------------------
+# Data
+# --------------------
+data:
+  path: data/processed/gefcom_wind_all_zones.csv
+
+# --------------------
+# Split: Track 2 LOFO + inner time validation
+# NOTE: held_out_group is required for Track2 and should be filled by the runner.
+# --------------------
+split:
+  type: lofo
+  held_out_group: null     # runner will fill this per run (e.g., 3)
+  val_days: 30
+  min_train: 1000
+  group_col: zone_id
+
+# --------------------
+# Sequence construction (must match VAE export)
+# --------------------
+seq:
+  lookback: 168
+  horizon: 1
+  feature_cols: null
+  include_target_as_input: true
+  add_missing_mask: true
+
+# --------------------
+# Zone behavior
+# Track2: keep_zone should be false (unknown zone at test time).
+# --------------------
+keep_zone: false
+zone_emb_dim: 8            # no effect when keep_zone=false
+
+# --------------------
+# Model: Transformer (deterministic)
+# IMPORTANT: for this project, transformer hparams live at top-level (not under model.transformer),
+#            because TransformerDetPipeline reads them from cfg directly.
+# --------------------
+d_model: 64
+nhead: 4
+num_layers: 2
+dim_feedforward: 128
+dropout: 0.1
+
+# --------------------
+# Optional VAE cache input
+# If use_vae=true and vae_mode=cache:
+#   - dataloader should feed x = latent_mu with shape [B, L, latent_dim]
+#   - it should resolve latents from:
+#       {vae_ckpt_dir}/heldout_{held_out_group}/seed_{seed}/artifacts/latents_{train,val,test}.npy
+# --------------------
+use_vae: true
+vae_mode: cache
+vae_ckg_dir: reports/vae/vae_track2_lofo
+
+
+# These are ignored in cache mode; keep for compatibility with "e2e" mode configs
+freeze_vae: true
+use_sample_z: false
+vae_ckpt_path: null
+vae_latent_dim: null
+vae: {}
+
+# --------------------
+# Training
+# --------------------
+training:
+  device: cuda
+  batch_size: 256
+  max_epochs: 10
+  patience: 3
+  lr: 0.001
+  weight_decay: 0.0
+  grad_clip: 1.0
+  num_workers: 0
+  pin_memory: true
+  val_every: 1
+
+# --------------------
+# Probabilistic inference (not used for deterministic transformer)
+# Kept only for schema alignment with TCN configs.
+# --------------------
+prob:
+  use_mc_dropout: false
+  mc_runs: 0
+  mc_quantiles: []

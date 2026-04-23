@@ -87,11 +87,13 @@ def _infer_track_from_path(exp_root: Path) -> str:
 
 
 def _infer_model_from_path(exp_root: Path) -> str:
-    name = exp_root.name.lower()
-    if "lgbm" in name:
+    s = str(exp_root).lower()
+    if "lgbm" in s:
         return "lgbm"
-    if "tcn" in name:
+    if "tcn" in s:
         return "tcn"
+    if "transformer" in s:
+        return "transformer"
     return "unknown"
 
 

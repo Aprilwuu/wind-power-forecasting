@@ -279,8 +279,19 @@ def main() -> None:
         else:
             # Infer from data (read only the group column)
             logger.info(f"Inferring LOFO groups from data column: {group_col}")
-            tmp = pd.read_csv(data_path, usecols=[group_col])
-            held_out_groups = sorted(tmp[group_col].dropna().unique().tolist())
+            try:
+                tmp = pd.read_csv(data_path, usecols=[group_col])
+                held_out_groups = sorted(tmp[group_col].dropna().unique().tolist())
+            except ValueError:
+                from src.data.load import load_raw_data
+                df_norm = load_raw_data(str(data_path))
+                if group_col not in df_norm.columns:
+                    raise ValueError(
+                        f"Requested group_col not found after load_raw_data normalization: wanted={group_col!r}. "
+                        f"Available columns={list(df_norm.columns)!r}"
+                    )
+                held_out_groups = sorted(df_norm[group_col].dropna().unique().tolist())
+
 
         if len(held_out_groups) == 0:
             raise ValueError("No held-out groups found for LOFO. Check split.group_col and the dataset.")

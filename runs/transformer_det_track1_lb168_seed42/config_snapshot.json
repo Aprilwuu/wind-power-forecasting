@@ -1,0 +1,30 @@
+{
+  "runtime": {
+    "pipeline": "transformer_det",
+    "data_path": "../data/processed/gefcom_wind_all_zones.csv",
+    "out_dir": "runs/transformer_det_track1_lb168_seed42",
+    "seed": 42,
+    "device": null,
+    "split": {
+      "type": "temporal",
+      "train_cut": "2013-07-01",
+      "val_cut": "2013-10-01"
+    },
+    "lookback": 168,
+    "horizon": 1,
+    "include_target_as_input": true,
+    "add_missing_mask": true,
+    "batch_size": 256,
+    "max_epochs": 50,
+    "patience": 8,
+    "lr": 0.001,
+    "weight_decay": 0.0,
+    "grad_clip": 1.0,
+    "train_loss_name": "mse",
+    "d_model": 64,
+    "nhead": 4,
+    "num_layers": 2,
+    "dim_feedforward": 128,
+    "dropout": 0.1
+  }
+}

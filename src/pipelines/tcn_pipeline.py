@@ -76,8 +76,8 @@ def _set_seed(seed: Optional[int]) -> None:
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     # Determinism (may slow down)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
 
 
 def _device_from_str(device: Optional[str]) -> torch.device:
